@@ -27,9 +27,11 @@ class RateEngine:
             if len(buf) == 0:
                 tps = 0.0
                 dt = 0.0
+                rec_ts = payload.timestamp
             else:
                 prev = buf[-1]
-                dt = payload.timestamp - prev["timestamp"]
+                rec_ts = max(payload.timestamp, prev["timestamp"] + 0.001)
+                dt = rec_ts - prev["timestamp"]
                 if dt < 0.001:
                     tps = prev["tps"]
                 else:
@@ -48,7 +50,7 @@ class RateEngine:
                 stats["sample_count"] += 1
 
             record = {
-                "timestamp": payload.timestamp,
+                "timestamp": rec_ts,
                 "current_taps": payload.currentTaps,
                 "total_taps": payload.totalTaps,
                 "current_currency": payload.currentCurrency,

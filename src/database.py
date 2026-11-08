@@ -138,13 +138,58 @@ class Database:
             return dict(row) if row else None
 
     def close_dangling_sessions(self) -> int:
-        """Closes any sessions left open from prior unexpected shutdowns."""
+        """Closes any sessions left open from prior unexpected shutdowns by recovering from snapshots."""
         now = time.time()
         with self._get_connection() as conn:
-            cur = conn.execute("""
-                UPDATE sessions SET end_time = ? WHERE end_time IS NULL;
-            """, (now,))
-            return cur.rowcount
+            cur = conn.execute("SELECT session_id, user_id, start_time, initial_taps, initial_rebirths FROM sessions WHERE end_time IS NULL;")
+            open_sessions = cur.fetchall()
+            if not open_sessions:
+                return 0
+
+            for s in open_sessions:
+                s_id = s["session_id"]
+                snap_cur = conn.execute("""
+                    SELECT timestamp, total_taps, current_rebirths 
+                    FROM snapshots WHERE session_id = ? ORDER BY timestamp DESC LIMIT 1;
+                """, (s_id,))
+                last_snap = snap_cur.fetchone()
+
+                stats_cur = conn.execute("""
+                    SELECT MAX(tps) as max_tps, AVG(tps) as avg_tps 
+                    FROM snapshots WHERE session_id = ?;
+                """, (s_id,))
+                stats = stats_cur.fetchone()
+
+                if last_snap:
+                    end_time = last_snap["timestamp"]
+                    final_taps = last_snap["total_taps"]
+                    final_rebirths = last_snap["current_rebirths"]
+                    taps_gained = max(0, final_taps - s["initial_taps"])
+                    rebirths_gained = max(0, final_rebirths - s["initial_rebirths"])
+                    max_tps = stats["max_tps"] or 0.0
+                    avg_tps = round(stats["avg_tps"] or 0.0, 2)
+                else:
+                    end_time = s["start_time"]
+                    final_taps = s["initial_taps"]
+                    final_rebirths = s["initial_rebirths"]
+                    taps_gained = 0
+                    rebirths_gained = 0
+                    max_tps = 0.0
+                    avg_tps = 0.0
+
+                conn.execute("""
+                    UPDATE sessions SET
+                        end_time = ?,
+                        final_taps = ?,
+                        taps_gained = ?,
+                        final_rebirths = ?,
+                        rebirths_gained = ?,
+                        max_tps = ?,
+                        avg_tps = ?
+                    WHERE session_id = ?;
+                """, (end_time, final_taps, taps_gained, final_rebirths, rebirths_gained, max_tps, avg_tps, s_id))
+
+            return len(open_sessions)
 
     def insert_snapshot(self, session_id: str, payload: TelemetryPayload, tps: float) -> None:
         pets_json = json.dumps([p.model_dump() for p in payload.equippedPets])

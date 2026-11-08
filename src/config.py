@@ -8,7 +8,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 class Settings:
     port: int = 3883
     host: str = "0.0.0.0"
-    db_path: str = str(BASE_DIR / "trackstats.db")
+    db_path: str = os.environ.get("TRACKSTATS_DB_PATH", str(BASE_DIR / "trackstats.db"))
     stale_timeout_sec: float = 15.0
     disconnect_timeout_sec: float = 60.0
     poller_interval_sec: float = 5.0

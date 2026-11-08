@@ -10,6 +10,13 @@ def test_e2e_multi_account_pipeline():
     user_a = 90001
     user_b = 90002
 
+    # Clean any prior snapshots for test idempotency
+    with db._get_connection() as conn:
+        conn.execute("DELETE FROM snapshots WHERE user_id IN (?, ?)", (user_a, user_b))
+        conn.execute("DELETE FROM accounts WHERE user_id IN (?, ?)", (user_a, user_b))
+    session_manager.remove_account(user_a)
+    session_manager.remove_account(user_b)
+
     # 1. Register accounts
     session_manager.toggle_tracking(user_a, True)
     session_manager.toggle_tracking(user_b, True)

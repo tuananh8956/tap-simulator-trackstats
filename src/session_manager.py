@@ -47,7 +47,7 @@ class SessionManager:
                     session_id = existing["session_id"]
                     self._session_start_times[user_id] = existing["start_time"]
                 else:
-                    session_id = self.db.start_session(user_id, now, payload.currentTaps, payload.currentRebirths)
+                    session_id = self.db.start_session(user_id, now, payload.totalTaps, payload.currentRebirths)
                     self._session_start_times[user_id] = now
                 self._active_sessions[user_id] = session_id
 
@@ -92,7 +92,7 @@ class SessionManager:
                         # Session disconnect
                         rates = self.rate_engine.get_rates(user_id)
                         last_p = self._last_payload.get(user_id)
-                        final_taps = last_p.currentTaps if last_p else 0
+                        final_taps = last_p.totalTaps if last_p else 0
                         final_rebirths = last_p.currentRebirths if last_p else 0
 
                         self.db.end_session(
@@ -101,6 +101,7 @@ class SessionManager:
                         )
                         self._active_sessions[user_id] = None
                         self._connection_state[user_id] = "DISCONNECTED"
+                        self.rate_engine.reset_account(user_id)
                         events.append({"user_id": user_id, "event": "DISCONNECTED", "session_id": session_id})
                     elif elapsed >= self.stale_timeout_sec:
                         self._connection_state[user_id] = "STALE"
@@ -168,7 +169,7 @@ class SessionManager:
                     now = time.time()
                     rates = self.rate_engine.get_rates(user_id)
                     last_p = self._last_payload.get(user_id)
-                    final_taps = last_p.currentTaps if last_p else 0
+                    final_taps = last_p.totalTaps if last_p else 0
                     final_rebirths = last_p.currentRebirths if last_p else 0
 
                     self.db.end_session(
@@ -176,7 +177,18 @@ class SessionManager:
                         rates["max_tps"], rates["avg_tps"]
                     )
                     self._active_sessions[user_id] = None
+                    self.rate_engine.reset_account(user_id)
                 self._connection_state[user_id] = "PAUSED"
             else:
                 self._connection_state[user_id] = "IDLE"
             return True
+
+    def remove_account(self, user_id: int) -> None:
+        """Cleans up all in-memory tracking structures when an account is deleted."""
+        with self._lock:
+            self._active_sessions.pop(user_id, None)
+            self._last_seen.pop(user_id, None)
+            self._last_payload.pop(user_id, None)
+            self._session_start_times.pop(user_id, None)
+            self._connection_state.pop(user_id, None)
+            self.rate_engine.reset_account(user_id)

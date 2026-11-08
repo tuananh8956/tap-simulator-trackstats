@@ -113,7 +113,7 @@ async def delete_account(user_id: int):
     success = db.delete_account(user_id)
     if not success:
         raise HTTPException(status_code=404, detail="Account not found")
-    rate_engine.reset_account(user_id)
+    session_manager.remove_account(user_id)
     return {"status": "deleted", "user_id": user_id}
 
 @app.post("/api/v1/accounts/{user_id}/tracking")

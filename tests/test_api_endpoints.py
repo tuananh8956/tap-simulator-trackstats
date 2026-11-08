@@ -38,6 +38,8 @@ def test_telemetry_post_and_live_stats():
     assert len(live_data["equipped_pets"]) == 1
 
 def test_accounts_api_and_tracking_toggle():
+    # Ensure account exists
+    db.upsert_account(55555, "TestPlayer55555", "Test55", "")
     # List accounts
     acc_resp = client.get("/api/v1/accounts")
     assert acc_resp.status_code == 200
