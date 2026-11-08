@@ -5,6 +5,8 @@ from src.main import app, session_manager, db
 client = TestClient(app)
 
 def test_telemetry_post_and_live_stats():
+    # Ensure account tracking is active
+    session_manager.toggle_tracking(55555, True)
     payload = {
         "userId": 55555,
         "currentTaps": 1000,
