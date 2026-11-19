@@ -2,6 +2,7 @@ import httpx
 import time
 import asyncio
 from typing import Dict, Any, Optional
+from src.models import extract_asset_id, sanitize_image_url
 
 TARGET_PLACE_ID = 72858262610964
 TARGET_UNIVERSE_ID = 10629695169
@@ -18,6 +19,8 @@ class RobloxPoller:
         self.debounce_sec = debounce_sec
         self._user_cache: Dict[int, Dict[str, Any]] = {}
         self._avatar_cache: Dict[int, str] = {}
+        self._asset_cache: Dict[int, str] = {}
+        self._username_cache: Dict[str, Dict[str, Any]] = {}
         self._presence_cache: Dict[int, Dict[str, Any]] = {}
         self._last_presence_query: Dict[int, float] = {}
         self._backoff_until: float = 0.0
@@ -131,3 +134,73 @@ class RobloxPoller:
             "lastLocation": ""
         }
         return self._presence_cache.get(user_id, default_res)
+
+    async def get_asset_thumbnail(self, asset_id: Any) -> Optional[str]:
+        clean_id = extract_asset_id(asset_id)
+        if not clean_id:
+            return None
+        if clean_id in self._asset_cache:
+            return self._asset_cache[clean_id]
+
+        now = time.time()
+        if now < self._backoff_until:
+            return None
+
+        url = (
+            f"https://thumbnails.roblox.com/v1/assets"
+            f"?assetIds={clean_id}&returnPolicy=PlaceHolder&size=150x150&format=Png&isCircular=false"
+        )
+        try:
+            async with await self._get_client() as client:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    data = resp.json().get("data", [])
+                    if data:
+                        img_url = sanitize_image_url(data[0].get("imageUrl"))
+                        if img_url:
+                            self._asset_cache[clean_id] = img_url
+                            return img_url
+                elif resp.status_code == 429:
+                    self._backoff_until = now + 15.0
+        except Exception:
+            pass
+        return None
+
+    async def get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
+        clean_name = (username or "").strip().lstrip("@")
+        if not clean_name:
+            return None
+        key = clean_name.lower()
+        if key in self._username_cache:
+            return self._username_cache[key]
+
+        now = time.time()
+        if now < self._backoff_until:
+            return None
+
+        url = "https://users.roblox.com/v1/usernames/users"
+        try:
+            async with await self._get_client() as client:
+                resp = await client.post(
+                    url,
+                    json={"usernames": [clean_name], "excludeBannedUsers": False},
+                )
+                if resp.status_code == 200:
+                    data = resp.json().get("data", [])
+                    if data:
+                        entry = data[0]
+                        uid = entry.get("id")
+                        if uid:
+                            user_obj = {
+                                "id": int(uid),
+                                "name": entry.get("name", clean_name),
+                                "displayName": entry.get("displayName", entry.get("name", clean_name)),
+                            }
+                            self._username_cache[key] = user_obj
+                            self._username_cache[user_obj["name"].lower()] = user_obj
+                            return user_obj
+                elif resp.status_code == 429:
+                    self._backoff_until = now + 15.0
+        except Exception:
+            pass
+        return None
