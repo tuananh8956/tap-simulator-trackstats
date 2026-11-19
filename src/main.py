@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import json
 import re
 import time
@@ -6,11 +7,20 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Set
 
-from fastapi import FastAPI, HTTPException, Response, Request
+from fastapi import Depends, FastAPI, HTTPException, Response, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from src.auth import (
+    ADMIN_COOKIE_NAME,
+    create_admin_session_token,
+    is_admin_request,
+    require_admin,
+    require_ingest_key,
+    require_read_access,
+    resolve_public_base_url,
+)
 from src.config import settings, BASE_DIR
 from src.models import (
     TelemetryPayload,
@@ -151,13 +161,81 @@ class TrackingToggleRequest(BaseModel):
     is_tracking: bool
 
 
+class AdminLoginRequest(BaseModel):
+    password: str
+
+
+# --- Health & Authentication endpoints ---
+
+
+@app.get("/healthz")
+async def healthcheck():
+    return {"status": "ok", "version": "2.0.0"}
+
+
+@app.get("/api/v1/auth/status")
+async def get_auth_status(request: Request):
+    admin_pw = (settings.admin_password or "").strip()
+    ingest_key = (settings.ingest_key or "").strip()
+    return {
+        "auth_enabled": bool(admin_pw),
+        "public_read": bool(settings.public_read),
+        "is_admin": is_admin_request(request),
+        "ingest_key_required": bool(ingest_key),
+    }
+
+
+@app.post("/api/v1/auth/login")
+async def admin_login(req: AdminLoginRequest, request: Request, response: Response):
+    admin_pw = (settings.admin_password or "").strip()
+    if admin_pw and not hmac.compare_digest((req.password or "").strip(), admin_pw):
+        raise HTTPException(status_code=401, detail="Invalid admin password")
+
+    base_url = resolve_public_base_url(request)
+    is_https = base_url.lower().startswith("https://")
+    token = create_admin_session_token(admin_pw) if admin_pw else "local"
+    response.set_cookie(
+        key=ADMIN_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        samesite="lax",
+        secure=is_https,
+        max_age=30 * 24 * 3600,
+        path="/",
+    )
+    return {"ok": True, "is_admin": True}
+
+
+@app.post("/api/v1/auth/logout")
+async def admin_logout(response: Response):
+    response.delete_cookie(key=ADMIN_COOKIE_NAME, path="/")
+    return {"ok": True, "is_admin": False}
+
+
+@app.get("/api/v1/connector/config", dependencies=[Depends(require_read_access)])
+async def get_connector_config(request: Request):
+    base_url = resolve_public_base_url(request)
+    is_admin = is_admin_request(request)
+    ingest_key = (settings.ingest_key or "").strip()
+    return {
+        "base_url": base_url,
+        "telemetry_url": f"{base_url}/api/v1/telemetry",
+        "inspect_url": f"{base_url}/api/v1/connector/inspect",
+        "loader_url": f"{base_url}/loader.lua",
+        "webhook_url": f"{base_url}/api/v1/webhook/discord",
+        "ingest_key_required": bool(ingest_key),
+        "is_admin": is_admin,
+        "ingest_key": (ingest_key if is_admin else None) if ingest_key else "",
+    }
+
+
 # --- Telemetry ingestion endpoint ---
 
 
-@app.post("/api/v1/telemetry")
+@app.post("/api/v1/telemetry", dependencies=[Depends(require_ingest_key)])
 async def ingest_telemetry(payload: TelemetryPayload, request: Request):
     result = session_manager.process_telemetry(payload)
-    base_url = str(request.base_url).rstrip("/")
+    base_url = resolve_public_base_url(request)
 
     if result.get("needs_profile_lookup"):
         _spawn_bg(_enrich_profile_bg(payload.userId))
@@ -182,12 +260,12 @@ async def ingest_telemetry(payload: TelemetryPayload, request: Request):
 # --- Farm Overview & Secret Vault endpoints (v2) ---
 
 
-@app.get("/api/v1/overview")
+@app.get("/api/v1/overview", dependencies=[Depends(require_read_access)])
 async def get_farm_overview():
     return session_manager.get_overview()
 
 
-@app.get("/api/v1/secrets")
+@app.get("/api/v1/secrets", dependencies=[Depends(require_read_access)])
 async def get_secrets_vault(
     user_id: Optional[int] = None,
     variant: Optional[str] = None,
@@ -197,12 +275,12 @@ async def get_secrets_vault(
     return session_manager.get_secrets_summary(user_id=user_id, variant=variant, tier=tier, query=q)
 
 
-@app.get("/api/v1/pets/catalog")
+@app.get("/api/v1/pets/catalog", dependencies=[Depends(require_read_access)])
 async def get_pet_catalog():
     return pet_catalog.list_catalog()
 
 
-@app.post("/api/v1/pets/catalog/{slug}/image")
+@app.post("/api/v1/pets/catalog/{slug}/image", dependencies=[Depends(require_admin)])
 async def update_pet_catalog_image(slug: str, req: CatalogImageOverrideRequest):
     clean_slug = slugify_pet_name(slug)
     existing = db.get_pet_catalog_item(clean_slug)
@@ -245,7 +323,7 @@ async def get_procedural_pet_icon(slug: str):
     )
 
 
-@app.get("/api/v1/hatches")
+@app.get("/api/v1/hatches", dependencies=[Depends(require_read_access)])
 async def list_hatch_events(
     limit: int = 50,
     rarity: Optional[str] = None,
@@ -262,22 +340,22 @@ async def list_hatch_events(
 # --- Alerts & Discord Webhook endpoints (v2) ---
 
 
-@app.get("/api/v1/settings/alerts")
+@app.get("/api/v1/settings/alerts", dependencies=[Depends(require_read_access)])
 async def get_alert_settings():
     return webhook_service.get_public_settings()
 
 
-@app.post("/api/v1/settings/alerts")
+@app.post("/api/v1/settings/alerts", dependencies=[Depends(require_admin)])
 async def update_alert_settings(req: AlertSettingsUpdate):
     return webhook_service.update_settings(req)
 
 
-@app.post("/api/v1/settings/alerts/test")
+@app.post("/api/v1/settings/alerts/test", dependencies=[Depends(require_admin)])
 async def test_alert_webhook():
     return await webhook_service.send_test_alert()
 
 
-@app.post("/api/v1/webhook/discord")
+@app.post("/api/v1/webhook/discord", dependencies=[Depends(require_ingest_key)])
 async def ingest_discord_webhook(payload: Dict[str, Any]):
     return await webhook_service.ingest_discord_webhook(payload)
 
@@ -320,7 +398,7 @@ async def get_luau_connector_script(endpoint: Optional[str] = None):
     )
 
 
-@app.post("/api/v1/connector/inspect")
+@app.post("/api/v1/connector/inspect", dependencies=[Depends(require_ingest_key)])
 async def submit_inspector_report(req: InspectorReportInput):
     return db.save_inspector_report(
         user_id=req.userId,
@@ -330,7 +408,7 @@ async def submit_inspector_report(req: InspectorReportInput):
     )
 
 
-@app.get("/api/v1/connector/inspect")
+@app.get("/api/v1/connector/inspect", dependencies=[Depends(require_read_access)])
 async def list_inspector_reports(limit: int = 10):
     return db.get_inspector_reports(limit=limit)
 
@@ -338,7 +416,7 @@ async def list_inspector_reports(limit: int = 10):
 # --- Accounts endpoints (v1 preserved + v2 fields) ---
 
 
-@app.get("/api/v1/accounts")
+@app.get("/api/v1/accounts", dependencies=[Depends(require_read_access)])
 async def list_accounts():
     accounts = db.get_accounts()
     result = []
@@ -365,7 +443,7 @@ async def list_accounts():
     return result
 
 
-@app.post("/api/v1/accounts")
+@app.post("/api/v1/accounts", dependencies=[Depends(require_admin)])
 async def add_account(req: AddAccountRequest):
     uid = req.userId
     user_info = await poller.get_user_info(uid)
@@ -379,7 +457,7 @@ async def add_account(req: AddAccountRequest):
     return db.get_account(uid)
 
 
-@app.delete("/api/v1/accounts/{user_id}")
+@app.delete("/api/v1/accounts/{user_id}", dependencies=[Depends(require_admin)])
 async def delete_account(user_id: int):
     success = db.delete_account(user_id)
     if not success:
@@ -388,7 +466,7 @@ async def delete_account(user_id: int):
     return {"status": "deleted", "user_id": user_id}
 
 
-@app.post("/api/v1/accounts/{user_id}/tracking")
+@app.post("/api/v1/accounts/{user_id}/tracking", dependencies=[Depends(require_admin)])
 async def toggle_account_tracking(user_id: int, req: TrackingToggleRequest):
     acc = db.get_account(user_id)
     if not acc:
@@ -397,7 +475,7 @@ async def toggle_account_tracking(user_id: int, req: TrackingToggleRequest):
     return {"status": "updated", "user_id": user_id, "is_tracking": req.is_tracking}
 
 
-@app.post("/api/v1/accounts/tracking/all")
+@app.post("/api/v1/accounts/tracking/all", dependencies=[Depends(require_admin)])
 async def toggle_all_tracking(req: TrackingToggleRequest):
     accounts = db.get_accounts()
     for acc in accounts:
@@ -405,17 +483,17 @@ async def toggle_all_tracking(req: TrackingToggleRequest):
     return {"status": "updated_all", "is_tracking": req.is_tracking, "count": len(accounts)}
 
 
-@app.get("/api/v1/accounts/{user_id}/live")
+@app.get("/api/v1/accounts/{user_id}/live", dependencies=[Depends(require_read_access)])
 async def get_account_live_state(user_id: int):
     return session_manager.get_live_state(user_id)
 
 
-@app.get("/api/v1/accounts/{user_id}/history")
+@app.get("/api/v1/accounts/{user_id}/history", dependencies=[Depends(require_read_access)])
 async def get_account_history(user_id: int):
     return db.get_sessions(user_id)
 
 
-@app.get("/api/v1/accounts/{user_id}/snapshots")
+@app.get("/api/v1/accounts/{user_id}/snapshots", dependencies=[Depends(require_read_access)])
 async def get_account_snapshots(user_id: int, limit: int = 50):
     return db.get_recent_snapshots(user_id, limit=limit)
 
@@ -423,7 +501,7 @@ async def get_account_snapshots(user_id: int, limit: int = 50):
 # --- Export & Restore ---
 
 
-@app.get("/api/v1/export/csv")
+@app.get("/api/v1/export/csv", dependencies=[Depends(require_admin)])
 async def export_csv():
     csv_data = db.export_data("csv")
     return Response(
@@ -433,7 +511,7 @@ async def export_csv():
     )
 
 
-@app.get("/api/v1/export/json")
+@app.get("/api/v1/export/json", dependencies=[Depends(require_admin)])
 async def export_json():
     json_data = db.export_data("json")
     return Response(
@@ -443,7 +521,7 @@ async def export_json():
     )
 
 
-@app.post("/api/v1/restore")
+@app.post("/api/v1/restore", dependencies=[Depends(require_admin)])
 async def restore_database(payload: Dict[str, Any]):
     success = db.restore_data(json.dumps(payload))
     if not success:
@@ -456,7 +534,7 @@ async def restore_database(payload: Dict[str, Any]):
 # --- Server-Sent Events (SSE) Stream ---
 
 
-@app.get("/api/v1/stream")
+@app.get("/api/v1/stream", dependencies=[Depends(require_read_access)])
 async def sse_stream(request: Request):
     async def event_generator():
         while True:
