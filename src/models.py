@@ -227,6 +227,37 @@ class TelemetryPayload(BaseModel):
     recentHatches: List[HatchEventInput] = Field(default_factory=list, alias="recentHatches")
     clientSource: str = Field(default="telemetry", alias="clientSource")
 
+    # v2.4 Auto-Trade & Server Location fields
+    placeId: Optional[int] = Field(default=None, alias="placeId")
+    jobId: Optional[str] = Field(default=None, alias="jobId")
+    tradeState: Optional[str] = Field(default=None, alias="tradeState")
+    tradeMessage: Optional[str] = Field(default=None, alias="tradeMessage")
+    secretInstanceIds: Optional[List[str]] = Field(default=None, alias="secretInstanceIds")
+
+
+class AutoTradeSettings(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    enabled: bool = False
+    mainUserId: Optional[int] = None
+    mainUsername: str = ""
+    unequipSecrets: bool = True
+    unlockSecrets: bool = True
+    hopOutAfterTrade: bool = True
+    leaseTimeoutSec: int = 120
+
+
+class AutoTradeSettingsUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    enabled: Optional[bool] = None
+    mainUserId: Optional[int] = None
+    mainUsername: Optional[str] = None
+    unequipSecrets: Optional[bool] = None
+    unlockSecrets: Optional[bool] = None
+    hopOutAfterTrade: Optional[bool] = None
+    leaseTimeoutSec: Optional[int] = None
+
 
 class CatalogImageOverrideRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)

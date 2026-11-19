@@ -626,6 +626,51 @@ class Database:
                 (key, json.dumps(value), ts),
             )
 
+    def get_auto_trade_settings(self) -> Dict[str, Any]:
+        defaults: Dict[str, Any] = {
+            "enabled": False,
+            "mainUserId": None,
+            "mainUsername": "",
+            "unequipSecrets": True,
+            "unlockSecrets": True,
+            "hopOutAfterTrade": True,
+            "leaseTimeoutSec": 120,
+        }
+        raw = self.get_setting("auto_trade_settings", default=None)
+        if not isinstance(raw, dict):
+            return defaults
+        merged = {**defaults}
+        if "enabled" in raw:
+            merged["enabled"] = bool(raw["enabled"])
+        if raw.get("mainUserId") is not None:
+            try:
+                uid = int(raw["mainUserId"])
+                merged["mainUserId"] = uid if uid > 0 else None
+            except Exception:
+                merged["mainUserId"] = None
+        else:
+            merged["mainUserId"] = None
+        if "mainUsername" in raw and raw["mainUsername"] is not None:
+            merged["mainUsername"] = str(raw["mainUsername"]).strip()
+        if "unequipSecrets" in raw:
+            merged["unequipSecrets"] = bool(raw["unequipSecrets"])
+        if "unlockSecrets" in raw:
+            merged["unlockSecrets"] = bool(raw["unlockSecrets"])
+        if "hopOutAfterTrade" in raw:
+            merged["hopOutAfterTrade"] = bool(raw["hopOutAfterTrade"])
+        if raw.get("leaseTimeoutSec") is not None:
+            try:
+                merged["leaseTimeoutSec"] = max(15, min(600, int(raw["leaseTimeoutSec"])))
+            except Exception:
+                merged["leaseTimeoutSec"] = 120
+        return merged
+
+    def save_auto_trade_settings(self, settings_dict: Dict[str, Any]) -> Dict[str, Any]:
+        current = self.get_auto_trade_settings()
+        updated = {**current, **(settings_dict or {})}
+        self.set_setting("auto_trade_settings", updated)
+        return self.get_auto_trade_settings()
+
     def save_inspector_report(
         self,
         user_id: int,
