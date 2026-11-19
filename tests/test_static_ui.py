@@ -1,8 +1,8 @@
-import pytest
 from fastapi.testclient import TestClient
 from src.main import app
 
 client = TestClient(app)
+
 
 def test_dashboard_served_with_required_elements():
     resp = client.get("/")
@@ -10,7 +10,11 @@ def test_dashboard_served_with_required_elements():
     html = resp.text
     assert "Tap Simulator Reborn" in html
     assert "TrackStats" in html
-    assert "chart.js" in html.lower() or "Chart" in html
-    assert "Live Statistics" in html or "Live Stats" in html
-    assert "Equipped Pets" in html or "Pet Showcase" in html
+    assert "Secret Vault" in html
     assert "Multi-Account" in html
+    assert "executorLoaderSnippet" in html
+    # Redundant sections removed from visible UI
+    assert "1-Minute Growth" not in html
+    assert "Active Boosts &amp; Potions" not in html
+    assert "Session History &amp; Data Export" not in html
+    assert "telemetry_feeder.py" not in html

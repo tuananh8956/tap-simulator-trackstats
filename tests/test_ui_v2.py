@@ -11,17 +11,14 @@ def test_v2_dashboard_contains_all_views_and_secret_vault_controls():
     for token in [
         "Tap Simulator Reborn",
         "TrackStats",
-        "Live Statistics",
-        "Equipped Pets",
-        "Multi-Account",
         "Secret Vault",
-        "Hatch Feed",
-        "Connector",
+        "Multi-Account",
         "farmTotalSecrets",
         "secretVaultGrid",
         "secretDetailModal",
-        "discordWebhookForm",
-        "inspectorDumpViewer",
+        "multiAccountsTableBody",
+        "executorLoaderSnippet",
+        "btnCopyLoaderSnippet",
         "btnDownloadScript",
     ]:
         assert token in html, f"Missing UI element/token: {token}"
@@ -37,7 +34,6 @@ def test_v2_js_and_css_served_with_xss_helpers_and_variant_styles():
     assert "function escapeHtml" in js
     assert "function safeImageUrl" in js
     assert "/api/v1/secrets" in js
-    assert "/api/v1/settings/alerts" in js
     assert ".variant-rainbow" in css
     assert ".variant-golden" in css
     assert ".variant-diamond" in css

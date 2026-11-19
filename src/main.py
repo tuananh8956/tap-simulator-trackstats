@@ -257,7 +257,7 @@ async def ingest_telemetry(payload: TelemetryPayload, request: Request):
         "tps": result.get("tps", 0.0),
         "secret_count": result.get("secret_count", 0),
         "new_hatches_count": len(result.get("new_hatches", [])),
-        "script_version": "2.2.0",
+        "script_version": "2.3.0",
     }
 
 
@@ -454,6 +454,7 @@ async def list_accounts():
                 "eggs_per_hour": live["eggs_per_hour"],
                 "world": live["world"],
                 "client_source": live["client_source"],
+                "secret_pets": live["secret_pets"],
                 "top_secrets": live["secret_pets"][:3],
             }
         )

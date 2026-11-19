@@ -13,7 +13,7 @@
 ===============================================================================
 ]]
 
-local SCRIPT_VERSION = "2.2.0"
+local SCRIPT_VERSION = "2.3.0"
 
 local CONFIG = {
     ENDPOINT_URL = "http://127.0.0.1:3883/api/v1/telemetry",
@@ -669,48 +669,38 @@ local function discoverGamePetCatalog()
         end)
     end
 
-    -- 3. Scan getgc(true) for static Pet Catalog definition tables
+    -- 3. Scan getgc(true) for static Pet Catalog definition tables (fast rawget filter)
     if type(getgc) == "function" then
         pcall(function()
             local objs = getgc(true)
-            local scanned = 0
             for _, tbl in ipairs(objs) do
                 if type(tbl) == "table" then
-                    scanned = scanned + 1
-                    if scanned > 15000 then
-                        break
-                    end
-                    local okIter, _ = pcall(function()
-                        for k, v in pairs(tbl) do
-                            if type(v) == "table" then
-                                local rawName = rawget(v, "Name") or rawget(v, "name") or rawget(v, "DisplayName") or rawget(v, "displayName") or (type(k) == "string" and k)
-                                local rawRarity = tostring(rawget(v, "Rarity") or rawget(v, "rarity") or rawget(v, "Tier") or rawget(v, "tier") or "")
-                                local rawImg = extractAssetId(rawget(v, "Image") or rawget(v, "image") or rawget(v, "Icon") or rawget(v, "icon") or rawget(v, "Thumbnail") or rawget(v, "AssetId"))
-                                local known = (type(rawName) == "string" and matchKnownSecret(rawName, rawImg)) or (type(k) == "string" and matchKnownSecret(k, rawImg))
-                                if known or rawRarity:lower():find("secret", 1, true) then
-                                    local finalName = (known and known.name) or (type(rawName) == "string" and not isBogusPetName(rawName) and rawName) or nil
-                                    if finalName then
-                                        local mult = parseFloatCompact(rawget(v, "Multiplier") or rawget(v, "multiplier") or rawget(v, "Power") or rawget(v, "power"))
-                                        local info = {
-                                            name = finalName,
-                                            tier = detectTier(rawRarity) or (known and known.tier) or "Secret",
-                                            egg = rawget(v, "Egg") or rawget(v, "egg") or (known and known.egg),
-                                            imageAssetId = rawImg or (known and known.imageAssetId),
-                                            multiplier = (mult and mult > 1) and mult or (known and known.multiplier),
-                                        }
-                                        registerKnownPet(finalName, info)
-                                        if type(k) == "string" then
-                                            registerKnownPet(k, info)
-                                        end
-                                        local rawId = rawget(v, "Id") or rawget(v, "id")
-                                        if type(rawId) == "string" then
-                                            registerKnownPet(rawId, info)
-                                        end
-                                    end
+                    -- Fast O(1) probe: only iterate tables that look like a pet definition or pet dictionary
+                    local probeRarity = rawget(tbl, "Rarity") or rawget(tbl, "rarity")
+                    local probeName = rawget(tbl, "Name") or rawget(tbl, "name") or rawget(tbl, "DisplayName")
+                    if probeRarity and type(probeName) == "string" then
+                        local rawRarity = tostring(probeRarity)
+                        local rawImg = extractAssetId(rawget(tbl, "Image") or rawget(tbl, "image") or rawget(tbl, "Icon") or rawget(tbl, "icon") or rawget(tbl, "Thumbnail") or rawget(tbl, "AssetId"))
+                        local known = matchKnownSecret(probeName, rawImg)
+                        if known or rawRarity:lower():find("secret", 1, true) then
+                            local finalName = (known and known.name) or (not isBogusPetName(probeName) and probeName) or nil
+                            if finalName then
+                                local mult = parseFloatCompact(rawget(tbl, "Multiplier") or rawget(tbl, "multiplier") or rawget(tbl, "Power") or rawget(tbl, "power"))
+                                local info = {
+                                    name = finalName,
+                                    tier = detectTier(rawRarity) or (known and known.tier) or "Secret",
+                                    egg = rawget(tbl, "Egg") or rawget(tbl, "egg") or (known and known.egg),
+                                    imageAssetId = rawImg or (known and known.imageAssetId),
+                                    multiplier = (mult and mult > 1) and mult or (known and known.multiplier),
+                                }
+                                registerKnownPet(finalName, info)
+                                local rawId = rawget(tbl, "Id") or rawget(tbl, "id")
+                                if type(rawId) == "string" or type(rawId) == "number" then
+                                    registerKnownPet(tostring(rawId), info)
                                 end
                             end
                         end
-                    end)
+                    end
                 end
             end
         end)
@@ -754,30 +744,32 @@ local function collectPetsFromGc()
 
     pcall(function()
         local objs = getgc(true)
-        local scanned = 0
-        for _, tbl in ipairs(objs) do
-            if type(tbl) == "table" then
-                scanned = scanned + 1
-                if scanned > 18000 then
-                    break
-                end
-                -- Look for a PlayerData / Replica / Profile / Inventory container table
-                local petsSub = nil
+        for _, rawTbl in ipairs(objs) do
+            if type(rawTbl) == "table" then
+                local tbl = (type(rawget(rawTbl, "Data")) == "table" and rawget(rawTbl, "Data")) or rawTbl
+                -- Fast O(1) rawget check for a PlayerData / Replica / Profile / Inventory container table
+                local petsSub = rawget(tbl, "Pets")
+                    or rawget(tbl, "pets")
+                    or rawget(tbl, "OwnedPets")
+                    or rawget(tbl, "ownedPets")
+                    or rawget(tbl, "PetInventory")
+                    or rawget(tbl, "Inventory")
                 local equippedMap = nil
-                pcall(function()
-                    petsSub = rawget(tbl, "Pets") or rawget(tbl, "pets") or rawget(tbl, "OwnedPets") or rawget(tbl, "ownedPets") or rawget(tbl, "PetInventory")
-                    local eqRaw = rawget(tbl, "EquippedPets") or rawget(tbl, "equippedPets") or rawget(tbl, "Equipped")
-                    if type(eqRaw) == "table" then
-                        equippedMap = {}
-                        for ek, ev in pairs(eqRaw) do
-                            if type(ev) == "string" then
-                                equippedMap[ev] = true
-                            elseif type(ek) == "string" and ev == true then
-                                equippedMap[ek] = true
+                if type(petsSub) == "table" then
+                    pcall(function()
+                        local eqRaw = rawget(tbl, "EquippedPets") or rawget(tbl, "equippedPets") or rawget(tbl, "Equipped")
+                        if type(eqRaw) == "table" then
+                            equippedMap = {}
+                            for ek, ev in pairs(eqRaw) do
+                                if type(ev) == "string" or type(ev) == "number" then
+                                    equippedMap[tostring(ev)] = true
+                                elseif (type(ek) == "string" or type(ek) == "number") and ev == true then
+                                    equippedMap[tostring(ek)] = true
+                                end
                             end
                         end
-                    end
-                end)
+                    end)
+                end
 
                 if type(petsSub) == "table" then
                     -- Verify this is an owned player inventory table (not a static catalog definition table)
@@ -1363,7 +1355,59 @@ local function sendInspectorSnapshot()
     if ReplicatedStorage then
         pcall(function()
             for _, child in ipairs(ReplicatedStorage:GetChildren()) do
-                table.insert(dump.replicatedStorageItems, { name = child.Name, className = child.ClassName, children = #child:GetChildren() })
+                local subNames = {}
+                for _, sc in ipairs(child:GetChildren()) do
+                    if #subNames < 30 then
+                        table.insert(subNames, sc.Name .. " (" .. sc.ClassName .. ")")
+                    end
+                end
+                table.insert(dump.replicatedStorageItems, {
+                    name = child.Name,
+                    className = child.ClassName,
+                    children = #child:GetChildren(),
+                    subItems = subNames,
+                })
+            end
+        end)
+    end
+
+    if type(getgc) == "function" then
+        dump.replicaSummary = {}
+        pcall(function()
+            for _, t in ipairs(getgc(true)) do
+                if type(t) == "table" and type(rawget(t, "Data")) == "table" and (rawget(t, "Class") ~= nil or rawget(t, "Tags") ~= nil or rawget(t, "Id") ~= nil) then
+                    local dKeys = {}
+                    local dTbl = rawget(t, "Data")
+                    local petSample = {}
+                    for dk, dv in pairs(dTbl) do
+                        table.insert(dKeys, tostring(dk) .. ":" .. type(dv))
+                        local ldk = tostring(dk):lower()
+                        if type(dv) == "table" and (ldk:find("pet", 1, true) or ldk:find("inv", 1, true) or ldk:find("secret", 1, true) or ldk:find("item", 1, true)) then
+                            local cnt = 0
+                            for pk, pv in pairs(dv) do
+                                cnt = cnt + 1
+                                if cnt <= 5 then
+                                    if type(pv) == "table" then
+                                        local fields = {}
+                                        for fk, fv in pairs(pv) do
+                                            table.insert(fields, tostring(fk) .. "=" .. tostring(fv))
+                                        end
+                                        table.insert(petSample, tostring(dk) .. "[" .. tostring(pk) .. "]={" .. table.concat(fields, ", ") .. "}")
+                                    else
+                                        table.insert(petSample, tostring(dk) .. "[" .. tostring(pk) .. "]=" .. tostring(pv))
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    if #dump.replicaSummary < 10 then
+                        table.insert(dump.replicaSummary, {
+                            class = tostring(rawget(t, "Class") or ""),
+                            keys = dKeys,
+                            petSample = petSample,
+                        })
+                    end
+                end
             end
         end)
     end

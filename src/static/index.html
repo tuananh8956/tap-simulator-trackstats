@@ -3,12 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Tap Simulator Reborn – TrackStats v2</title>
+  <title>Tap Simulator Reborn – TrackStats &amp; Secret Vault</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/style.css">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 <body>
@@ -25,28 +24,11 @@
         </div>
         <div>
           <div class="brand-title">Tap Simulator Reborn</div>
-          <div class="brand-subtitle">TrackStats v2 &bull; Secret Vault &amp; Live Telemetry</div>
+          <div class="brand-subtitle">TrackStats &bull; Secret Inventory &amp; Multi-Account Farm</div>
         </div>
       </div>
 
       <div class="nav-controls">
-        <div class="account-selector-wrap">
-          <select id="accountSelect" class="account-select" aria-label="Select Account">
-            <option value="">Loading accounts...</option>
-          </select>
-          <button id="btnAddAccount" class="btn btn-secondary">
-            <i data-lucide="user-plus" style="width: 15px; height: 15px;"></i> Add Account
-          </button>
-        </div>
-
-        <button id="btnToggleTracking" class="btn btn-toggle-tracking active">
-          <i data-lucide="pause" style="width: 15px; height: 15px;"></i> Pause Tracking
-        </button>
-
-        <button id="btnSoundToggle" class="btn btn-icon-toggle" title="Toggle Secret Hatch Sound Alert">
-          <i data-lucide="volume-2" style="width: 16px; height: 16px;"></i>
-        </button>
-
         <button id="btnAdminAuth" class="btn btn-secondary" title="Unlock Admin Controls &amp; Executor Key">
           <i data-lucide="lock" style="width: 15px; height: 15px;"></i>
           <span id="adminAuthText">Admin</span>
@@ -59,289 +41,60 @@
       </div>
     </header>
 
-    <!-- 6-Tab View Switcher -->
+    <!-- Streamlined 3-Tab Switcher -->
     <nav class="tab-bar" role="tablist">
-      <button class="tab-btn active" data-tab="overview">
-        <i data-lucide="layout-dashboard" style="width: 16px; height: 16px;"></i>
-        <span>Overview</span>
-      </button>
-      <button class="tab-btn" data-tab="secrets">
+      <button class="tab-btn active" data-tab="secrets">
         <i data-lucide="sparkles" style="width: 16px; height: 16px;"></i>
         <span>Secret Vault</span>
         <span id="tabSecretBadge" class="tab-badge">0</span>
-      </button>
-      <button class="tab-btn" data-tab="hatches">
-        <i data-lucide="egg" style="width: 16px; height: 16px;"></i>
-        <span>Hatch Feed</span>
       </button>
       <button class="tab-btn" data-tab="accounts">
         <i data-lucide="users" style="width: 16px; height: 16px;"></i>
         <span>Multi-Account</span>
         <span id="tabAccBadge" class="tab-badge tab-badge-cyan">0</span>
       </button>
-      <button class="tab-btn" data-tab="history">
-        <i data-lucide="history" style="width: 16px; height: 16px;"></i>
-        <span>History &amp; Export</span>
-      </button>
       <button class="tab-btn" data-tab="connector">
-        <i data-lucide="plug-zap" style="width: 16px; height: 16px;"></i>
-        <span>Connector</span>
+        <i data-lucide="code-2" style="width: 16px; height: 16px;"></i>
+        <span>Executor Script</span>
       </button>
     </nav>
 
-    <!-- Persistent Farm Overview KPI Strip -->
-    <section class="farm-kpi-strip" aria-label="Farm Overview">
-      <div class="kpi-card kpi-live">
+    <!-- Persistent 4-Card Farm Summary KPI Strip -->
+    <section class="farm-kpi-strip" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));" aria-label="Farm Overview">
+      <div class="kpi-card kpi-live" id="kpiAccountsShortcut" style="cursor:pointer;" title="Click to open Multi-Account list">
         <div class="kpi-label">Accounts Online</div>
         <div id="farmAccountsOnline" class="kpi-value mono">0 / 0</div>
         <div id="farmAccountsBreakdown" class="kpi-sub">Waiting for telemetry</div>
       </div>
 
-      <div class="kpi-card kpi-secret" id="kpiSecretShortcut" title="Click to open Secret Vault">
+      <div class="kpi-card kpi-secret" id="kpiSecretShortcut" style="cursor:pointer;" title="Click to open Secret Vault">
         <div class="kpi-label">Total Farm Secrets</div>
         <div id="farmTotalSecrets" class="kpi-value mono highlight-secret">0</div>
         <div id="farmSecretVariants" class="kpi-pills"></div>
       </div>
 
-      <div class="kpi-card kpi-tps">
-        <div class="kpi-label">Farm Live TPS</div>
-        <div id="farmTotalTps" class="kpi-value mono highlight-green">0.0</div>
-        <div class="kpi-sub">Combined across all accounts</div>
+      <div class="kpi-card kpi-eggs">
+        <div class="kpi-label">Total Eggs Hatched</div>
+        <div id="farmTotalEggs" class="kpi-value mono highlight-cyan">0</div>
+        <div id="farmEggsPerHour" class="kpi-sub">0 eggs/hr</div>
       </div>
 
       <div class="kpi-card kpi-taps">
-        <div class="kpi-label">Farm Taps &amp; Currency</div>
-        <div id="farmTotalTaps" class="kpi-value mono highlight-cyan">0</div>
-        <div id="farmTotalCurrency" class="kpi-sub">Currency: 0 &bull; Rebirths: 0</div>
-      </div>
-
-      <div class="kpi-card kpi-eggs">
-        <div class="kpi-label">Total Eggs Hatched</div>
-        <div id="farmTotalEggs" class="kpi-value mono">0</div>
-        <div id="farmEggsPerHour" class="kpi-sub">0 eggs/hr</div>
+        <div class="kpi-label">Total Rebirths</div>
+        <div id="farmTotalRebirths" class="kpi-value mono highlight-green">0</div>
+        <div id="farmTotalTapsSub" class="kpi-sub">Across all tracked accounts</div>
       </div>
     </section>
 
     <!-- ================================================================ -->
-    <!-- VIEW 1: OVERVIEW (LIVE TELEMETRY CONSOLE)                         -->
+    <!-- VIEW 1: SECRET VAULT (KHO SECRET + IN-GAME PET IMAGES)            -->
     <!-- ================================================================ -->
-    <main id="view-overview" class="view-panel active">
-      <div class="grid-top">
-        <!-- Active Player Overview Card -->
-        <div class="card player-box">
-          <div class="player-avatar-wrap">
-            <img id="playerAvatar" class="player-avatar" src="" alt="Avatar" />
-            <span id="playerClientBadge" class="client-source-pill">TELEMETRY</span>
-          </div>
-          <div>
-            <div id="playerName" class="player-name">--</div>
-            <div id="playerUserId" class="player-meta">@-- (ID: --)</div>
-          </div>
-          <div class="player-badges-stack">
-            <div class="player-game-badge">
-              <i data-lucide="gamepad-2" style="width: 14px; height: 14px;"></i>
-              <span>Tap Simulator REBORN (72858262610964)</span>
-            </div>
-            <div class="world-badge">
-              <i data-lucide="globe" style="width: 14px; height: 14px;"></i>
-              <span>World: <strong id="playerWorld">Unknown</strong></span>
-            </div>
-            <div class="playtime-badge">
-              <i data-lucide="clock" style="width: 14px; height: 14px;"></i>
-              <span>Session: <strong id="sessionDuration" class="mono">00:00:00</strong></span>
-            </div>
-          </div>
-
-          <div class="boosts-section">
-            <div class="boosts-title">
-              <i data-lucide="flask-conical" style="width: 13px; height: 13px;"></i>
-              Active Boosts &amp; Potions
-            </div>
-            <div id="activeBoostsList" class="boosts-list">
-              <span class="boost-empty">No active boosts</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Live Statistics & Rolling Growth -->
-        <div class="card">
-          <div class="card-header">
-            <div class="card-title">
-              <i data-lucide="activity" style="color: var(--cyan-glow); width: 18px; height: 18px;"></i>
-              Live Statistics
-            </div>
-            <span class="meta-pill">Auto-stream via SSE</span>
-          </div>
-
-          <div class="stats-grid">
-            <div class="stat-item tps-item">
-              <div class="stat-label">Real-time TPS</div>
-              <div id="statTps" class="stat-value mono highlight-green">0.0</div>
-              <div id="statMaxTps" class="stat-sub">Max: 0.0 | Avg: 0.0</div>
-            </div>
-
-            <div class="stat-item secret-item">
-              <div class="stat-label">Secrets Owned</div>
-              <div id="statSecrets" class="stat-value mono highlight-secret">0</div>
-              <div id="statSecretsSub" class="stat-sub">Active account vault</div>
-            </div>
-
-            <div class="stat-item">
-              <div class="stat-label">Current Taps</div>
-              <div id="statCurrentTaps" class="stat-value mono highlight-cyan">0</div>
-              <div class="stat-sub">This Rebirth</div>
-            </div>
-
-            <div class="stat-item">
-              <div class="stat-label">Total Taps</div>
-              <div id="statTotalTaps" class="stat-value mono">0</div>
-              <div class="stat-sub">Lifetime Gained</div>
-            </div>
-
-            <div class="stat-item">
-              <div class="stat-label">Rebirths</div>
-              <div id="statCurrentRebirths" class="stat-value mono">0</div>
-              <div class="stat-sub">Multiplier Tier</div>
-            </div>
-
-            <div class="stat-item">
-              <div class="stat-label">Wins</div>
-              <div id="statWins" class="stat-value mono">0</div>
-              <div class="stat-sub">Total Wins</div>
-            </div>
-
-            <div class="stat-item">
-              <div class="stat-label">Currency</div>
-              <div id="statCurrency" class="stat-value mono">0</div>
-              <div class="stat-sub">Gems &bull; Coins</div>
-            </div>
-
-            <div class="stat-item eggs-item">
-              <div class="stat-label">Eggs Hatched</div>
-              <div id="statEggsHatched" class="stat-value mono">0</div>
-              <div id="statEggsRate" class="stat-sub">0 eggs/hr</div>
-            </div>
-          </div>
-
-          <!-- Rolling Growth Panel (1m, 5m, 15m) -->
-          <div class="growth-grid">
-            <div class="growth-card">
-              <div class="growth-header">
-                <span>1-Minute Growth</span>
-                <span id="growth1mTps" class="mono">0.0 TPS</span>
-              </div>
-              <div class="growth-row">
-                <span>Taps Gained</span>
-                <span id="growth1mTaps" class="mono">+0</span>
-              </div>
-              <div class="growth-row">
-                <span>Currency Gained</span>
-                <span id="growth1mCurrency" class="mono">+0</span>
-              </div>
-            </div>
-
-            <div class="growth-card">
-              <div class="growth-header">
-                <span>5-Minute Growth</span>
-                <span id="growth5mTps" class="mono">0.0 TPS</span>
-              </div>
-              <div class="growth-row">
-                <span>Taps Gained</span>
-                <span id="growth5mTaps" class="mono">+0</span>
-              </div>
-              <div class="growth-row">
-                <span>Currency Gained</span>
-                <span id="growth5mCurrency" class="mono">+0</span>
-              </div>
-            </div>
-
-            <div class="growth-card">
-              <div class="growth-header">
-                <span>15-Minute Growth</span>
-                <span id="growth15mTps" class="mono">0.0 TPS</span>
-              </div>
-              <div class="growth-row">
-                <span>Taps Gained</span>
-                <span id="growth15mTaps" class="mono">+0</span>
-              </div>
-              <div class="growth-row">
-                <span>Currency Gained</span>
-                <span id="growth15mCurrency" class="mono">+0</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Active Account Secret Showcase Preview -->
-      <div class="card section-gap">
-        <div class="card-header">
-          <div class="card-title">
-            <i data-lucide="sparkles" style="color: var(--secret-glow); width: 18px; height: 18px;"></i>
-            Account Secret Pets
-          </div>
-          <button class="btn btn-secondary btn-sm" id="btnJumpToVault">
-            Open Full Secret Vault &rarr;
-          </button>
-        </div>
-        <div id="overviewSecretsGrid" class="secret-cards-grid compact">
-          <div class="empty-state">No Secret pets recorded for this account yet.</div>
-        </div>
-      </div>
-
-      <!-- Live TPS Chart -->
-      <div class="card section-gap">
-        <div class="card-header">
-          <div class="card-title">
-            <i data-lucide="trending-up" style="color: var(--cyan-glow); width: 18px; height: 18px;"></i>
-            Real-time TPS &amp; Taps Progression
-          </div>
-          <span class="meta-pill">Live Sub-second Stream</span>
-        </div>
-        <div class="chart-container">
-          <canvas id="tpsChart"></canvas>
-        </div>
-      </div>
-
-      <!-- Equipped Pets + Mini Hatch Feed -->
-      <div class="grid-two-col">
-        <div class="card">
-          <div class="card-header">
-            <div class="card-title">
-              <i data-lucide="paw-print" style="color: var(--cyan-glow); width: 18px; height: 18px;"></i>
-              Equipped Pets &amp; Inventory Overview
-            </div>
-            <span id="totalPetPower" class="meta-pill">Total Power: 0</span>
-          </div>
-          <div id="petsGrid" class="pets-grid">
-            <div class="empty-state">Waiting for telemetry...</div>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-header">
-            <div class="card-title">
-              <i data-lucide="flame" style="color: var(--amber-glow); width: 18px; height: 18px;"></i>
-              Recent Secret Hatches
-            </div>
-            <button class="btn btn-secondary btn-sm" id="btnJumpToHatches">View All</button>
-          </div>
-          <div id="miniHatchFeed" class="hatch-feed-list">
-            <div class="empty-state">No hatch events recorded yet.</div>
-          </div>
-        </div>
-      </div>
-    </main>
-
-    <!-- ================================================================ -->
-    <!-- VIEW 2: SECRET VAULT (KHO SECRET + PER-PET IMAGES)                -->
-    <!-- ================================================================ -->
-    <section id="view-secrets" class="view-panel">
+    <section id="view-secrets" class="view-panel active">
       <div class="card section-gap">
         <div class="card-header wrap-header">
           <div class="card-title">
             <i data-lucide="sparkles" style="color: var(--secret-glow); width: 18px; height: 18px;"></i>
-            Secret Vault &amp; Image Catalog
+            Secret Vault &amp; In-Game Pet Inventory
           </div>
           <div class="vault-mode-toggle">
             <button id="btnVaultModeOwned" class="pill-btn active">Owned Secrets</button>
@@ -354,7 +107,7 @@
         <div class="filter-toolbar">
           <div class="search-box">
             <i data-lucide="search" style="width: 15px; height: 15px; color: var(--text-dim);"></i>
-            <input id="secretSearchInput" type="text" placeholder="Search Secret name, egg, or owner..." />
+            <input id="secretSearchInput" type="text" placeholder="Search Secret name, egg, or @account..." />
           </div>
 
           <select id="secretAccountFilter" class="filter-select" aria-label="Filter by Account">
@@ -363,29 +116,27 @@
 
           <select id="secretTierFilter" class="filter-select" aria-label="Filter by Tier">
             <option value="all">All Tiers</option>
-            <option value="Secret III">Secret III</option>
-            <option value="Secret II">Secret II</option>
             <option value="Secret I">Secret I</option>
-            <option value="Limited">Limited</option>
+            <option value="Secret II">Secret II</option>
+            <option value="Secret III">Secret III</option>
             <option value="Leaderboard">Leaderboard</option>
-            <option value="Event">Event</option>
+            <option value="Limited">Limited</option>
           </select>
 
           <select id="secretSortSelect" class="filter-select" aria-label="Sort Secrets">
             <option value="count">Sort: Quantity</option>
-            <option value="power">Sort: Max Power</option>
             <option value="multiplier">Sort: Multiplier</option>
-            <option value="name">Sort: Name A–Z</option>
+            <option value="name">Sort: Name (A-Z)</option>
           </select>
         </div>
 
-        <div id="variantFilterPills" class="variant-pills-bar">
+        <div class="variant-pills-bar" id="variantFilterPills">
           <button class="pill-btn active" data-variant="all">All Variants</button>
-          <button class="pill-btn pill-rainbow" data-variant="Rainbow">Rainbow</button>
-          <button class="pill-btn pill-golden" data-variant="Golden">Golden</button>
-          <button class="pill-btn pill-diamond" data-variant="Diamond">Diamond</button>
-          <button class="pill-btn pill-shiny" data-variant="Shiny">Shiny</button>
           <button class="pill-btn" data-variant="Normal">Normal</button>
+          <button class="pill-btn" data-variant="Golden">Golden</button>
+          <button class="pill-btn" data-variant="Diamond">Diamond</button>
+          <button class="pill-btn" data-variant="Rainbow">Rainbow</button>
+          <button class="pill-btn" data-variant="Shiny">Shiny</button>
         </div>
 
         <div id="secretVaultGrid" class="secret-cards-grid">
@@ -395,127 +146,26 @@
     </section>
 
     <!-- ================================================================ -->
-    <!-- VIEW 3: LIVE HATCH FEED & DISCORD ALERTS                          -->
-    <!-- ================================================================ -->
-    <section id="view-hatches" class="view-panel">
-      <div class="grid-hatch-layout">
-        <div class="card">
-          <div class="card-header wrap-header">
-            <div class="card-title">
-              <i data-lucide="egg" style="color: var(--secret-glow); width: 18px; height: 18px;"></i>
-              Live Hatch Feed
-            </div>
-            <div class="toolbar-inline">
-              <select id="hatchRarityFilter" class="filter-select">
-                <option value="">All Rarities</option>
-                <option value="Secret">Secret Only</option>
-                <option value="Mythic">Mythic</option>
-              </select>
-              <button id="btnTestSound" class="btn btn-secondary btn-sm">
-                <i data-lucide="bell-ring" style="width: 14px; height: 14px;"></i> Test Chime
-              </button>
-            </div>
-          </div>
-
-          <div id="fullHatchFeedList" class="hatch-feed-list">
-            <div class="empty-state">Waiting for hatch events...</div>
-          </div>
-        </div>
-
-        <div class="alerts-sidebar">
-          <div class="card section-gap">
-            <div class="card-header">
-              <div class="card-title">
-                <i data-lucide="bell" style="color: var(--cyan-glow); width: 18px; height: 18px;"></i>
-                Discord Webhook Alerts
-              </div>
-              <span id="webhookStatusPill" class="meta-pill">Not Configured</span>
-            </div>
-
-            <form id="discordWebhookForm" class="settings-form">
-              <div class="form-group">
-                <label class="form-label" for="inputWebhookUrl">Discord Webhook URL</label>
-                <input id="inputWebhookUrl" class="form-input" type="text" placeholder="https://discord.com/api/webhooks/..." />
-                <div class="form-hint">Token is masked after saving. Leave untouched to preserve existing webhook.</div>
-              </div>
-
-              <label class="toggle-row">
-                <input id="chkAlertsEnabled" type="checkbox" />
-                <span>Enable Outbound Discord Alerts</span>
-              </label>
-
-              <label class="toggle-row">
-                <input id="chkNotifySecret" type="checkbox" checked />
-                <span>Notify on Secret Pet Hatch</span>
-              </label>
-
-              <label class="toggle-row">
-                <input id="chkNotifyDisconnect" type="checkbox" checked />
-                <span>Notify on Account Disconnect (60s)</span>
-              </label>
-
-              <label class="toggle-row">
-                <input id="chkNotifyStale" type="checkbox" />
-                <span>Notify on Account Stale (15s)</span>
-              </label>
-
-              <label class="toggle-row">
-                <input id="chkForwardInbound" type="checkbox" />
-                <span>Forward Inbound Webhook Bridge to Discord</span>
-              </label>
-
-              <div class="form-actions">
-                <button type="submit" class="btn btn-primary">Save Settings</button>
-                <button type="button" id="btnTestWebhook" class="btn btn-secondary">Test Alert</button>
-                <button type="button" id="btnClearWebhook" class="btn btn-danger-ghost">Clear URL</button>
-              </div>
-            </form>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title">
-                <i data-lucide="webhook" style="color: var(--purple-glow); width: 18px; height: 18px;"></i>
-                Inbound Webhook Bridge
-              </div>
-            </div>
-            <p class="muted-copy">
-              Send Discord-format hatch embeds directly to this local endpoint to populate your Live Hatch Feed automatically:
-            </p>
-            <div class="copy-field">
-              <code id="inboundWebhookUrl">http://127.0.0.1:3883/api/v1/webhook/discord</code>
-              <button type="button" class="btn btn-secondary btn-sm" id="btnCopyInboundWebhook">Copy</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ================================================================ -->
-    <!-- VIEW 4: MULTI-ACCOUNT MATRIX PRO                                  -->
+    <!-- VIEW 2: MULTI-ACCOUNT FARM TABLE                                  -->
     <!-- ================================================================ -->
     <section id="view-accounts" class="view-panel">
       <div class="card">
         <div class="card-header wrap-header">
           <div class="card-title">
             <i data-lucide="users" style="color: var(--cyan-glow); width: 18px; height: 18px;"></i>
-            Multi-Account Tracking Matrix
+            Multi-Account Farm &amp; Per-Account Secrets
           </div>
           <div class="toolbar-inline">
             <div class="search-box compact">
               <i data-lucide="search" style="width: 14px; height: 14px; color: var(--text-dim);"></i>
-              <input id="accountSearchInput" type="text" placeholder="Filter account or world..." />
+              <input id="accountSearchInput" type="text" placeholder="Filter @username or world..." />
             </div>
             <select id="accountStatusFilter" class="filter-select">
               <option value="all">All Status</option>
               <option value="LIVE">LIVE</option>
               <option value="STALE">STALE</option>
               <option value="DISCONNECTED">DISCONNECTED</option>
-              <option value="PAUSED">PAUSED</option>
-              <option value="IDLE">IDLE</option>
             </select>
-            <button id="btnStartAll" class="btn btn-secondary btn-sm">Track All</button>
-            <button id="btnPauseAll" class="btn btn-secondary btn-sm">Pause All</button>
           </div>
         </div>
 
@@ -525,18 +175,15 @@
               <tr>
                 <th>Account</th>
                 <th>Status</th>
-                <th>World</th>
-                <th>Secrets</th>
-                <th>Current Taps</th>
-                <th>Live TPS</th>
+                <th>World / Island</th>
+                <th>Secrets in Inventory</th>
+                <th>Eggs Hatched</th>
                 <th>Rebirths</th>
-                <th>Eggs</th>
-                <th>Playtime</th>
-                <th>Actions</th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody id="multiAccountsTableBody">
-              <tr><td colspan="10" class="empty-cell">Loading accounts...</td></tr>
+              <tr><td colspan="7" class="empty-cell">Loading accounts...</td></tr>
             </tbody>
           </table>
         </div>
@@ -544,165 +191,63 @@
     </section>
 
     <!-- ================================================================ -->
-    <!-- VIEW 5: HISTORY & DATA EXPORT / RESTORE                           -->
-    <!-- ================================================================ -->
-    <section id="view-history" class="view-panel">
-      <div class="card">
-        <div class="card-header wrap-header">
-          <div class="card-title">
-            <i data-lucide="history" style="color: var(--cyan-glow); width: 18px; height: 18px;"></i>
-            Session History &amp; Data Export
-          </div>
-          <div class="toolbar-inline">
-            <a href="/api/v1/export/csv" class="btn btn-secondary btn-sm" style="text-decoration:none;">
-              <i data-lucide="download" style="width: 14px; height: 14px;"></i> Export CSV
-            </a>
-            <a href="/api/v1/export/json" class="btn btn-secondary btn-sm" style="text-decoration:none;">
-              <i data-lucide="file-json" style="width: 14px; height: 14px;"></i> Export JSON
-            </a>
-            <label class="btn btn-secondary btn-sm" style="cursor:pointer;">
-              <i data-lucide="upload" style="width: 14px; height: 14px;"></i> Restore JSON
-              <input id="inputRestoreJson" type="file" accept=".json,application/json" style="display:none;" />
-            </label>
-          </div>
-        </div>
-
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Started At</th>
-                <th>Duration</th>
-                <th>Taps Gained</th>
-                <th>Rebirths Gained</th>
-                <th>Max TPS</th>
-                <th>Avg TPS</th>
-              </tr>
-            </thead>
-            <tbody id="historyTableBody">
-              <tr><td colspan="6" class="empty-cell">No session records.</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-
-    <!-- ================================================================ -->
-    <!-- VIEW 6: GAME CONNECTOR & LUAU SCRIPT                              -->
+    <!-- VIEW 3: EXECUTOR SCRIPT (1-LINE LOADSTRING)                       -->
     <!-- ================================================================ -->
     <section id="view-connector" class="view-panel">
-      <div class="grid-two-col">
-        <div class="card">
-          <div class="card-header">
-            <div class="card-title">
-              <i data-lucide="code-2" style="color: var(--cyan-glow); width: 18px; height: 18px;"></i>
-              In-Game Luau Telemetry Script
-            </div>
-            <span class="meta-pill">Read-Only &bull; Zero Cookies</span>
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <i data-lucide="code-2" style="color: var(--cyan-glow); width: 18px; height: 18px;"></i>
+            Executor Luau Script (Auto Inventory &amp; Secret Reader)
           </div>
+          <span class="meta-pill">Read-Only &bull; Auto Hot-Reload</span>
+        </div>
 
-          <p class="muted-copy">
-            Paste the 1-line command below into your Roblox executor (or save it inside your executor's <code>autoexec</code> folder) to stream live Taps, Rebirths, Eggs, Worlds, Boosts, Secret Pet Inventory, and Secret Hatch popups straight to this web dashboard. Includes an <strong>AFK Closed-Inventory Guard</strong> so closing your Pet UI never wipes your Secret Vault.
-          </p>
+        <p class="muted-copy">
+          Paste this command into your executor (or save inside <code>autoexec</code>) to stream live Eggs, Rebirths, World, and every Secret Pet in your inventory straight to this dashboard.
+        </p>
 
-          <div id="connectorKeyNotice" class="connector-key-banner">
-            <span id="connectorKeyNoticeText">Ready to copy executor loader command.</span>
-            <button type="button" id="btnUnlockFromConnector" class="btn btn-secondary btn-sm" style="display:none;">Unlock Admin to Reveal Key</button>
+        <div id="connectorKeyNotice" class="connector-key-banner">
+          <span id="connectorKeyNoticeText">Ready to copy executor loader command.</span>
+          <button type="button" id="btnUnlockFromConnector" class="btn btn-secondary btn-sm" style="display:none;">Unlock Admin to Reveal Key</button>
+        </div>
+
+        <div class="code-preview-box loader-code-box">
+          <div class="code-preview-header">
+            <span>1. Paste into Executor / Autoexec (Recommended)</span>
+            <button type="button" class="btn btn-primary btn-sm" id="btnCopyLoaderSnippet">
+              <i data-lucide="copy" style="width: 14px; height: 14px;"></i> Copy Executor Script
+            </button>
           </div>
-
-          <div class="code-preview-box loader-code-box">
-            <div class="code-preview-header">
-              <span>1. Paste into Executor / Autoexec (Recommended)</span>
-              <button type="button" class="btn btn-primary btn-sm" id="btnCopyLoaderSnippet">
-                <i data-lucide="copy" style="width: 14px; height: 14px;"></i> Copy Executor Script
-              </button>
-            </div>
-            <pre><code id="executorLoaderSnippet">getgenv().TrackStats = {
+          <pre><code id="executorLoaderSnippet">getgenv().TrackStats = {
     Key = "YOUR_TRACKSTATS_KEY",
     Interval = 2,
 }
 loadstring(game:HttpGet("http://127.0.0.1:3883/loader.lua"))()</code></pre>
-          </div>
-
-          <div class="code-preview-box" style="margin-top: 12px;">
-            <div class="code-preview-header">
-              <span>2. Fallback Executor Command (If game:HttpGet is disabled)</span>
-              <button type="button" class="btn btn-secondary btn-sm" id="btnCopyFallbackSnippet">
-                <i data-lucide="copy" style="width: 14px; height: 14px;"></i> Copy Fallback
-              </button>
-            </div>
-            <pre><code id="executorFallbackSnippet">getgenv().TrackStats = { Key = "YOUR_TRACKSTATS_KEY", Interval = 2 }
-local req = request or http_request or (syn and syn.request)
-loadstring(req({ Url = "http://127.0.0.1:3883/loader.lua", Method = "GET" }).Body)()</code></pre>
-          </div>
-
-          <div class="connector-endpoint-box" style="margin-top: 12px;">
-            <div class="form-label">Telemetry Endpoint URL</div>
-            <div class="copy-field">
-              <code id="telemetryEndpointUrl">http://127.0.0.1:3883/api/v1/telemetry</code>
-              <button type="button" class="btn btn-secondary btn-sm" id="btnCopyEndpoint">Copy</button>
-            </div>
-          </div>
-
-          <div class="connector-actions">
-            <button id="btnCopyScript" class="btn btn-secondary">
-              <i data-lucide="file-code" style="width: 15px; height: 15px;"></i> Copy Full Raw .lua
-            </button>
-            <a id="btnDownloadScript" href="/api/v1/connector/script.lua" download="tap_sim_reborn_tracker.lua" class="btn btn-secondary" style="text-decoration:none;">
-              <i data-lucide="download" style="width: 15px; height: 15px;"></i> Download .lua
-            </a>
-          </div>
-
-          <div class="code-preview-box">
-            <div class="code-preview-header">
-              <span>Quick Local Test Feeder (No Roblox Required)</span>
-            </div>
-            <pre><code>python tools/telemetry_feeder.py --multi 3 --rate 45 --hatch-interval 15</code></pre>
-          </div>
         </div>
 
-        <div class="card">
-          <div class="card-header">
-            <div class="card-title">
-              <i data-lucide="scan-search" style="color: var(--secret-glow); width: 18px; height: 18px;"></i>
-              Live In-Game Inspector Dump
-            </div>
-            <button id="btnRefreshInspector" class="btn btn-secondary btn-sm">
-              <i data-lucide="refresh-cw" style="width: 14px; height: 14px;"></i> Refresh
+        <div class="code-preview-box" style="margin-top: 12px;">
+          <div class="code-preview-header">
+            <span>2. Fallback Command (If game:HttpGet is disabled)</span>
+            <button type="button" class="btn btn-secondary btn-sm" id="btnCopyFallbackSnippet">
+              <i data-lucide="copy" style="width: 14px; height: 14px;"></i> Copy Fallback
             </button>
           </div>
-          <p class="muted-copy">
-            When <code>INSPECT_ON_START = true</code> is enabled in the Luau script, it automatically posts discovered <code>leaderstats</code>, Attributes, and candidate <code>PlayerGui</code> Pet/HUD paths here so you can refine <code>CONFIG.PATHS</code> after any game update.
-          </p>
-          <div id="inspectorDumpViewer" class="inspector-viewer">
-            <div class="empty-state">No inspector dump received yet. Run the Luau script with INSPECT_ON_START = true to inspect in-game paths.</div>
-          </div>
+          <pre><code id="executorFallbackSnippet">getgenv().TrackStats = { Key = "YOUR_TRACKSTATS_KEY", Interval = 2 }
+local req = request or http_request or (syn and syn.request)
+loadstring(req({ Url = "http://127.0.0.1:3883/loader.lua", Method = "GET" }).Body)()</code></pre>
+        </div>
+
+        <div class="connector-actions" style="margin-top: 14px;">
+          <button id="btnCopyScript" class="btn btn-secondary">
+            <i data-lucide="file-code" style="width: 15px; height: 15px;"></i> Copy Full Raw .lua
+          </button>
+          <a id="btnDownloadScript" href="/api/v1/connector/script.lua" download="tap_sim_reborn_tracker.lua" class="btn btn-secondary" style="text-decoration:none;">
+            <i data-lucide="download" style="width: 15px; height: 15px;"></i> Download .lua
+          </a>
         </div>
       </div>
     </section>
-  </div>
-
-  <!-- Add Account Modal -->
-  <div id="addAccountModal" class="modal-overlay">
-    <div class="modal-box">
-      <div class="modal-header">
-        <div class="modal-title">Add Roblox Account</div>
-        <button id="btnCloseAddModal" class="modal-close">&times;</button>
-      </div>
-      <form id="formAddAccount">
-        <div class="form-group">
-          <label class="form-label" for="inputUserId">Roblox User ID</label>
-          <input id="inputUserId" class="form-input" type="number" required placeholder="e.g. 12345678" />
-          <p class="form-hint">
-            Username, display name, and avatar are fetched automatically via public Roblox Web APIs. Zero password or cookie required.
-          </p>
-        </div>
-        <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" id="btnCancelAddModal">Cancel</button>
-          <button type="submit" class="btn btn-primary">Add Account</button>
-        </div>
-      </form>
-    </div>
   </div>
 
   <!-- Secret Detail & Image Override Modal -->
@@ -742,7 +287,7 @@ loadstring(req({ Url = "http://127.0.0.1:3883/loader.lua", Method = "GET" }).Bod
             </div>
           </div>
           <div class="modal-footer">
-            <button type="button" id="btnResetPetImage" class="btn btn-secondary">Reset to Default SVG</button>
+            <button type="button" id="btnResetPetImage" class="btn btn-secondary">Reset Default Image</button>
             <button type="submit" class="btn btn-primary">Save Pet Image</button>
           </div>
         </form>
@@ -762,7 +307,7 @@ loadstring(req({ Url = "http://127.0.0.1:3883/loader.lua", Method = "GET" }).Bod
           <label class="form-label" for="inputAdminPassword">Admin Password</label>
           <input id="inputAdminPassword" class="form-input" type="password" placeholder="Enter TRACKSTATS_ADMIN_PASSWORD" />
           <p class="form-hint">
-            Public visitors can view live stats &amp; the Secret Vault in read-only mode. Unlock Admin to reveal your live Executor Ingest Key, manage accounts, or configure Discord Webhooks.
+            Anyone with the link can view live stats &amp; the Secret Vault. Unlock Admin to reveal your live Executor Ingest Key or delete old accounts.
           </p>
         </div>
         <div class="modal-footer">
