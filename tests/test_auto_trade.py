@@ -239,3 +239,74 @@ def test_dashboard_includes_auto_trade_command_center():
     assert "/api/v1/trade/settings" in js
     assert "/api/v1/trade/queue/" in js
     assert "queueAccountTrade" in js
+
+
+def test_review_fixes_stale_teleport_retention_cooldown_respect_and_userid_override(monkeypatch):
+    import time
+
+    monkeypatch.setattr(settings, "admin_password", "")
+    monkeypatch.setattr(settings, "ingest_key", "")
+    session_manager.reset_after_restore()
+    for acc in db.get_accounts():
+        db.delete_account(acc["user_id"])
+
+    t0 = time.time()
+    client = TestClient(app)
+    db.upsert_account(1000, "MainOne", "MainOne", "")
+    db.upsert_account(1001, "MainTwo", "MainTwo", "")
+    db.upsert_account(2001, "SoloClone", "SoloClone", "")
+
+    # 1. Configure by mainUsername = MainOne, then override by mainUserId = 1001 without mainUsername (Finding #7)
+    client.post("/api/v1/trade/settings", json={"enabled": True, "mainUsername": "MainOne"})
+    res_override = client.post("/api/v1/trade/settings", json={"mainUserId": 1001})
+    assert res_override.status_code == 200
+    assert res_override.json()["main_user_id"] == 1001
+    assert res_override.json()["main_username"] == "MainTwo"
+
+    # 2. MainTwo and SoloClone come online
+    client.post("/api/v1/telemetry", json={"userId": 1001, "placeId": 72858262610964, "jobId": "job-main-two", "timestamp": t0})
+    r_clone = client.post(
+        "/api/v1/telemetry",
+        json={
+            "userId": 2001,
+            "placeId": 72858262610964,
+            "jobId": "job-clone-1",
+            "timestamp": t0,
+            "secretPets": [{"name": "Anubis", "rarity": "Secret", "count": 4}],
+        },
+    ).json()
+    assert r_clone["trade_directive"]["role"] == "CLONE_ACTIVE"
+
+    # 3. During teleport (t0 + 20s), SoloClone becomes STALE (15s < 20s < 60s), while MainTwo heartbeats at t0 + 20s.
+    # SoloClone MUST retain its active lease while STALE during teleport (Finding #4).
+    client.post("/api/v1/telemetry", json={"userId": 1001, "placeId": 72858262610964, "jobId": "job-main-two", "timestamp": t0 + 20.0})
+    session_manager.check_timeouts(now=t0 + 20.0)
+    st_stale = session_manager.get_trade_status(now=t0 + 20.0)
+    assert st_stale["active_clone_id"] == 2001
+
+    # 4. If SoloClone is skipped when it is the ONLY clone, it must stay on cooldown and NOT be immediately re-leased (Finding #6).
+    client.post("/api/v1/telemetry", json={"userId": 2001, "placeId": 72858262610964, "jobId": "job-main-two", "timestamp": t0 + 21.0, "secretPets": [{"name": "Anubis", "rarity": "Secret", "count": 4}]})
+    res_skip = client.post("/api/v1/trade/skip").json()
+    assert res_skip["active_clone_id"] is None
+
+    # 5. Idle directive includes mainJobId & hopOutAfterTrade so completed clone can hop out of Main's server (Finding #1)
+    r_done = client.post(
+        "/api/v1/telemetry",
+        json={
+            "userId": 2001,
+            "placeId": 72858262610964,
+            "jobId": "job-main-two",
+            "timestamp": t0 + 45.0,
+            "tradeState": "COMPLETED",
+            "secretPets": [],
+        },
+    ).json()
+    assert r_done["trade_directive"]["mainJobId"] == "job-main-two"
+    assert r_done["trade_directive"]["hopOutAfterTrade"] is True
+
+
+def test_luau_script_includes_partner_verification_and_empty_owned_sync():
+    lua_path = Path(__file__).resolve().parent.parent / "scripts" / "tap_sim_reborn_tracker.lua"
+    src = lua_path.read_text(encoding="utf-8")
+    assert "isTradePartnerVerified" in src
+    assert "type(repData.Pets.Owned) == \"table\"" in src

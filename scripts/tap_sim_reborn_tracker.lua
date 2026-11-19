@@ -981,6 +981,9 @@ local function collectPetsFromGc()
             }
 
             if type(repData.Pets) == "table" then
+                if type(repData.Pets.Owned) == "table" then
+                    foundInventoryTable = true
+                end
                 -- Check if repData.Pets is a container with sub-tables (like Held, Owned, Storage, List, Pets, Inventory)
                 for subKey, subVal in pairs(repData.Pets) do
                     local lsk = tostring(subKey):lower()
@@ -1924,25 +1927,16 @@ local function discoverTradingAndPetApis()
         loadFolderMods("Controllers.UI", apis.uiMods)
 
         pcall(function()
+            local seenRemoteInst = {}
             for _, desc in ipairs(ReplicatedStorage:GetDescendants()) do
-                if desc:IsA("RemoteEvent") or desc:IsA("RemoteFunction") then
-                    local ln = desc.Name:lower()
-                    apis.remotes[ln] = desc
+                if (desc:IsA("RemoteEvent") or desc:IsA("RemoteFunction")) and not seenRemoteInst[desc] then
+                    seenRemoteInst[desc] = true
                     local fullRel = desc:GetFullName():gsub("^ReplicatedStorage%.", ""):lower()
-                    apis.remotes[fullRel] = desc
-                end
-            end
-        end)
-    end
-
-    if type(getgc) == "function" then
-        pcall(function()
-            for _, obj in ipairs(getgc(true)) do
-                if type(obj) == "table" then
-                    local net = rawget(obj, "Network")
-                    if type(net) == "table" and (type(rawget(net, "InvokeServer")) == "function" or type(rawget(net, "FireServer")) == "function") then
-                        table.insert(apis.networkAdapters, net)
-                    end
+                    table.insert(apis.remotes, {
+                        name = desc.Name:lower(),
+                        path = fullRel,
+                        inst = desc,
+                    })
                 end
             end
         end)
@@ -1956,7 +1950,7 @@ local function invokeRemoteOrMethod(modGroup, methodNames, remotePatterns, ...)
     local args = { ... }
     local called = false
 
-    -- 1. Try loaded controller modules
+    -- 1. Try loaded controller modules (stop at first matching method per module)
     if type(modGroup) == "table" then
         for _, mod in pairs(modGroup) do
             if type(mod) == "table" then
@@ -1969,47 +1963,60 @@ local function invokeRemoteOrMethod(modGroup, methodNames, remotePatterns, ...)
                         end
                         if ok then
                             called = true
+                            break
                         end
                     end
                 end
                 local net = rawget(mod, "Network")
-                if type(net) == "table" then
+                if not called and type(net) == "table" then
                     for _, pat in ipairs(remotePatterns) do
+                        local firedNet = false
                         pcall(function()
-                            if type(net.InvokeServer) == "function" then
-                                net:InvokeServer(pat, table.unpack(args))
-                                called = true
-                            elseif type(net.FireServer) == "function" then
+                            if type(net.FireServer) == "function" then
                                 net:FireServer(pat, table.unpack(args))
-                                called = true
+                                firedNet = true
+                            elseif type(net.InvokeServer) == "function" then
+                                task.spawn(function()
+                                    pcall(function() net:InvokeServer(pat, table.unpack(args)) end)
+                                end)
+                                firedNet = true
                             end
                         end)
+                        if firedNet then
+                            called = true
+                            break
+                        end
                     end
                 end
             end
         end
     end
 
-    -- 2. Try matching RemoteEvent / RemoteFunction instances in ReplicatedStorage
+    if called then
+        return true
+    end
+
+    -- 2. Try matching RemoteEvent / RemoteFunction instances (deduplicated, non-yielding)
     local apis = discoverTradingAndPetApis()
-    for rKey, rInst in pairs(apis.remotes) do
-        for _, pat in ipairs(remotePatterns) do
-            local lpat = pat:lower()
-            if rKey == lpat or rKey:find(lpat, 1, true) then
-                pcall(function()
-                    if rInst:IsA("RemoteFunction") then
-                        rInst:InvokeServer(table.unpack(args))
-                        called = true
-                    elseif rInst:IsA("RemoteEvent") then
-                        rInst:FireServer(table.unpack(args))
-                        called = true
-                    end
-                end)
+    for _, pat in ipairs(remotePatterns) do
+        local lpat = pat:lower()
+        for _, rEntry in ipairs(apis.remotes) do
+            if rEntry.name == lpat or rEntry.path:find(lpat, 1, true) then
+                local rInst = rEntry.inst
+                if rInst:IsA("RemoteEvent") then
+                    pcall(function() rInst:FireServer(table.unpack(args)) end)
+                    return true
+                elseif rInst:IsA("RemoteFunction") then
+                    task.spawn(function()
+                        pcall(function() rInst:InvokeServer(table.unpack(args)) end)
+                    end)
+                    return true
+                end
             end
         end
     end
 
-    return called
+    return false
 end
 
 local function fireGuiButton(btn)
@@ -2084,34 +2091,45 @@ local function collectOwnedSecretRecords()
             ["maxstorage"] = true,
         }
 
-        for subKey, subVal in pairs(repData.Pets) do
-            local lsk = tostring(subKey):lower()
-            if type(subVal) == "table" and not skipSubKeys[lsk] then
-                for pk, pv in pairs(subVal) do
-                    if type(pv) == "table" then
-                        local uuid = tostring(pv.Id or pv.UUID or pv.id or pk)
-                        if not seenUuids[uuid] then
-                            local rawId = pv.Name or pv.name or pv.Species or pv.PetName or pv.PetId or (type(pk) == "string" and pk)
-                            local rawImg = extractAssetId(pv.Image or pv.Icon or pv.AssetId)
-                            local known = matchKnownSecret(tostring(rawId or ""), rawImg)
-                            local rawRarity = tostring(pv.Rarity or pv.rarity or "")
-                            local isSec = (known ~= nil)
-                                or (rawRarity:lower():find("secret", 1, true) ~= nil)
-                                or (rawRarity:lower() == "leaderboard")
-                                or (pv.IsSecret == true)
-                            local petName = (known and known.name) or (type(rawId) == "string" and not isBogusPetName(rawId) and rawId) or nil
-                            if isSec and petName and not isBogusPetName(petName) then
-                                seenUuids[uuid] = true
-                                local isEq = (pv.Equip == true) or (pv.Equipped == true) or (eqMap[uuid] == true)
-                                local isLock = (pv.Locked == true) or (pv.locked == true)
-                                table.insert(records, {
-                                    uuid = uuid,
-                                    name = petName,
-                                    equipped = isEq,
-                                    locked = isLock,
-                                    raw = pv,
-                                })
-                            end
+        local candidateTables = {}
+        if type(repData.Pets.Owned) == "table" then
+            table.insert(candidateTables, repData.Pets.Owned)
+        else
+            for subKey, subVal in pairs(repData.Pets) do
+                local lsk = tostring(subKey):lower()
+                if type(subVal) == "table" and not skipSubKeys[lsk] then
+                    table.insert(candidateTables, subVal)
+                end
+            end
+        end
+
+        for _, subVal in ipairs(candidateTables) do
+            for pk, pv in pairs(subVal) do
+                if type(pv) == "table" then
+                    local keyStr = tostring(pk)
+                    local uuid = (type(pk) == "string" and #keyStr >= 16 and keyStr)
+                        or tostring(pv.UUID or pv.Id or pv.id or pk)
+                    if not seenUuids[uuid] then
+                        local rawId = pv.Name or pv.name or pv.Species or pv.PetName or pv.PetId or (type(pk) == "string" and pk)
+                        local rawImg = extractAssetId(pv.Image or pv.Icon or pv.AssetId)
+                        local known = matchKnownSecret(tostring(rawId or ""), rawImg)
+                        local rawRarity = tostring(pv.Rarity or pv.rarity or "")
+                        local isSec = (known ~= nil)
+                            or (rawRarity:lower():find("secret", 1, true) ~= nil)
+                            or (rawRarity:lower() == "leaderboard")
+                            or (pv.IsSecret == true)
+                        local petName = (known and known.name) or (type(rawId) == "string" and not isBogusPetName(rawId) and rawId) or nil
+                        if isSec and petName and not isBogusPetName(petName) then
+                            seenUuids[uuid] = true
+                            local isEq = (pv.Equip == true) or (pv.Equipped == true) or (eqMap[uuid] == true)
+                            local isLock = (pv.Locked == true) or (pv.locked == true)
+                            table.insert(records, {
+                                uuid = uuid,
+                                name = petName,
+                                equipped = isEq,
+                                locked = isLock,
+                                raw = pv,
+                            })
                         end
                     end
                 end
@@ -2241,9 +2259,31 @@ local function getTradingScreenGui()
     return pg and pg:FindFirstChild("Trading") or nil
 end
 
-local function isActiveTradeWindowVisible()
+local function isTradePartnerVerified(trustedSet)
     local tGui = getTradingScreenGui()
     if not tGui or not tGui.Enabled then
+        return false
+    end
+    for _, desc in ipairs(tGui:GetDescendants()) do
+        if desc:IsA("TextLabel") and isGuiActuallyVisible(desc) and desc.Text and desc.Text ~= "" then
+            local lowerTxt = desc.Text:lower()
+            for key, _ in pairs(trustedSet) do
+                local lKey = tostring(key):lower()
+                if #lKey >= 3 and lowerTxt:find(lKey, 1, true) then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+local function isActiveTradeWindowVisible(trustedSet)
+    local tGui = getTradingScreenGui()
+    if not tGui or not tGui.Enabled then
+        return false
+    end
+    if type(trustedSet) == "table" and not isTradePartnerVerified(trustedSet) then
         return false
     end
     for _, desc in ipairs(tGui:GetDescendants()) do
@@ -2366,20 +2406,38 @@ local function acceptIncomingTradeAndConfirm(trustedSet)
         end
     end
 
-    -- Scan PlayerGui for incoming trade request prompt or active trade Ready/Confirm button
+    -- Scan PlayerGui.Trading (or verified trade request prompt mentioning a trusted username)
     local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
     if pg then
-        for _, gui in ipairs({ pg:FindFirstChild("Trading"), pg:FindFirstChild("Dialogs"), pg:FindFirstChild("Dialog"), pg:FindFirstChild("Notifications") }) do
+        for _, gui in ipairs({ pg:FindFirstChild("Trading"), pg:FindFirstChild("Dialogs"), pg:FindFirstChild("Dialog") }) do
             if gui and gui:IsA("ScreenGui") and gui.Enabled then
-                for _, desc in ipairs(gui:GetDescendants()) do
-                    if (desc:IsA("TextButton") or desc:IsA("ImageButton")) and isGuiActuallyVisible(desc) then
-                        local nm = desc.Name:lower()
-                        local txt = (desc:IsA("TextButton") and desc.Text or ""):lower()
-                        if (nm:find("accept", 1, true) or nm:find("ready", 1, true) or nm:find("confirm", 1, true) or nm == "yes"
-                            or txt:find("accept", 1, true) or txt:find("ready", 1, true) or txt:find("confirm", 1, true))
-                            and not nm:find("decline", 1, true) and not nm:find("cancel", 1, true)
-                            and not txt:find("decline", 1, true) and not txt:find("cancel", 1, true) then
-                            fireGuiButton(desc)
+                local guiVerified = (gui.Name == "Trading" and isTradePartnerVerified(trustedSet))
+                if not guiVerified then
+                    for _, lbl in ipairs(gui:GetDescendants()) do
+                        if lbl:IsA("TextLabel") and isGuiActuallyVisible(lbl) and lbl.Text and lbl.Text ~= "" then
+                            local ltxt = lbl.Text:lower()
+                            for k, _ in pairs(trustedSet) do
+                                local lk = tostring(k):lower()
+                                if #lk >= 3 and ltxt:find(lk, 1, true) then
+                                    guiVerified = true
+                                    break
+                                end
+                            end
+                        end
+                        if guiVerified then break end
+                    end
+                end
+                if guiVerified then
+                    for _, desc in ipairs(gui:GetDescendants()) do
+                        if (desc:IsA("TextButton") or desc:IsA("ImageButton")) and isGuiActuallyVisible(desc) then
+                            local nm = desc.Name:lower()
+                            local txt = (desc:IsA("TextButton") and desc.Text or ""):lower()
+                            if (nm:find("accept", 1, true) or nm:find("ready", 1, true) or nm:find("confirm", 1, true)
+                                or txt:find("accept", 1, true) or txt:find("ready", 1, true) or txt:find("confirm", 1, true))
+                                and not nm:find("decline", 1, true) and not nm:find("cancel", 1, true)
+                                and not txt:find("decline", 1, true) and not txt:find("cancel", 1, true) then
+                                fireGuiButton(desc)
+                            end
                         end
                     end
                 end
@@ -2387,11 +2445,11 @@ local function acceptIncomingTradeAndConfirm(trustedSet)
         end
     end
 
-    if isActiveTradeWindowVisible() then
+    if isActiveTradeWindowVisible(trustedSet) then
         invokeRemoteOrMethod(
             apis.tradingMods,
             { "SetReady", "Ready", "Accept", "Confirm", "ConfirmTrade", "AcceptTrade" },
-            { "SetTradeReady", "TradeReady", "ReadyTrade", "AcceptTrade", "ConfirmTrade", "Ready", "Confirm" },
+            { "SetTradeReady", "TradeReady", "ReadyTrade", "AcceptTrade", "ConfirmTrade" },
             true
         )
     end
@@ -2484,7 +2542,13 @@ local function executeTradeDirective(directive, secretRecords)
             unlockSecretPets(secretRecords)
         end
 
-        if isActiveTradeWindowVisible() then
+        local mainTrustedSet = {
+            [tostring(mainPlr.UserId)] = true,
+            [mainPlr.Name:lower()] = true,
+            [(mainPlr.DisplayName or mainPlr.Name):lower()] = true,
+        }
+
+        if isActiveTradeWindowVisible(mainTrustedSet) then
             hasTradedInThisServer = true
             currentTradeState = "TRADING"
             currentTradeMessage = "Trading " .. tostring(#secretRecords) .. " secrets to " .. mainPlr.Name
@@ -2503,9 +2567,13 @@ local function executeTradeDirective(directive, secretRecords)
         return
     end
 
-    if #secretRecords == 0 and hasTradedInThisServer then
+    if #secretRecords == 0 and (hasTradedInThisServer or (directive.mainJobId and tostring(game.JobId) == tostring(directive.mainJobId))) then
         currentTradeState = "COMPLETED"
         currentTradeMessage = "All secrets consolidated"
+        if directive.hopOutAfterTrade ~= false then
+            currentTradeState = "HOPPING_OUT"
+            hopToAnotherServer(directive.mainJobId)
+        end
     else
         currentTradeState = "IDLE"
         currentTradeMessage = nil

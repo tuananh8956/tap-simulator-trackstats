@@ -132,9 +132,10 @@ class SessionManager:
             active_secrets = secret_counts.get(active, 0)
             active_conn = self._connection_state.get(active, "IDLE")
 
-            if (main_uid is not None and active == int(main_uid)) or active_conn != "LIVE":
+            # Allow LIVE or STALE (during 15-30s Roblox teleport) up to leaseTimeoutSec; evict on DISCONNECTED/PAUSED/IDLE
+            if (main_uid is not None and active == int(main_uid)) or active_conn not in ("LIVE", "STALE"):
                 self._active_trade_clone = None
-            elif active_secrets <= 0 or (active_state == "COMPLETED" and active_secrets <= 0):
+            elif active_secrets <= 0 or active_state == "COMPLETED":
                 self._recent_trade_completions.insert(
                     0,
                     {
@@ -163,6 +164,17 @@ class SessionManager:
         ordered_queue: List[int] = []
         seen_q = set()
 
+        # If active clone is still leased (including STALE during teleport), keep it at the head of the queue
+        if (
+            self._active_trade_clone is not None
+            and self._active_trade_clone in acc_by_id
+            and (main_uid is None or self._active_trade_clone != int(main_uid))
+            and secret_counts.get(self._active_trade_clone, 0) > 0
+            and current_time >= self._trade_cooldown_until.get(self._active_trade_clone, 0.0)
+        ):
+            ordered_queue.append(self._active_trade_clone)
+            seen_q.add(self._active_trade_clone)
+
         for uid in self._priority_trade_queue:
             if (
                 uid not in seen_q
@@ -188,19 +200,6 @@ class SessionManager:
             for uid in auto_candidates:
                 ordered_queue.append(uid)
                 seen_q.add(uid)
-
-            if not ordered_queue:
-                cooldown_candidates = [
-                    uid
-                    for uid in acc_by_id
-                    if (main_uid is None or uid != int(main_uid))
-                    and self._connection_state.get(uid) == "LIVE"
-                    and secret_counts.get(uid, 0) > 0
-                ]
-                cooldown_candidates.sort(
-                    key=lambda u: (self._trade_cooldown_until.get(u, 0.0), -secret_counts.get(u, 0), u)
-                )
-                ordered_queue.extend(cooldown_candidates)
 
         if main_ready:
             if self._active_trade_clone is None and ordered_queue:
@@ -305,6 +304,8 @@ class SessionManager:
             "action": "NONE",
             "mainUserId": main_uid,
             "mainUsername": status["main_username"],
+            "mainJobId": status["main_job_id"],
+            "hopOutAfterTrade": bool(cfg.get("hopOutAfterTrade", True)),
         }
 
     def get_trade_status(self, now: Optional[float] = None) -> Dict[str, Any]:
@@ -320,6 +321,9 @@ class SessionManager:
                 # If username changed and mainUserId wasn't explicitly set in the request, reset mainUserId so it resolves cleanly
                 if "mainUserId" not in patch and patch["mainUsername"].lower() != (current.get("mainUsername") or "").lower():
                     patch["mainUserId"] = None
+            elif "mainUserId" in patch and patch["mainUserId"] is not None:
+                if patch["mainUserId"] != current.get("mainUserId"):
+                    patch["mainUsername"] = ""
             self.db.save_auto_trade_settings({**current, **patch})
             return self._reconcile_trade_queue_locked(now=now)
 
