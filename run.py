@@ -19,7 +19,14 @@ def main():
     print(f"  [+] Target Game:     Place ID 72858262610964")
     print("=" * 65)
 
-    uvicorn.run("src.main:app", host=args.host, port=args.port, reload=args.reload)
+    uvicorn.run(
+        "src.main:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        proxy_headers=True,
+        forwarded_allow_ips="*",
+    )
 
 if __name__ == "__main__":
     main()

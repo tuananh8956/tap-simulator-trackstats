@@ -150,3 +150,12 @@ def test_dashboard_html_contains_executor_loader_and_admin_modal(client):
     assert "loadConnectorConfig" in js
     assert "/api/v1/auth/login" in js
     assert "/loader.lua" in js
+
+
+def test_railway_packaging_files_exist():
+    from src.config import BASE_DIR
+
+    dockerfile = (BASE_DIR / "Dockerfile").read_text(encoding="utf-8")
+    railway_toml = (BASE_DIR / "railway.toml").read_text(encoding="utf-8")
+    assert "--proxy-headers" in dockerfile
+    assert "/healthz" in railway_toml

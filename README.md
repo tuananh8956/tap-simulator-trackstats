@@ -47,10 +47,28 @@ Open `http://127.0.0.1:3883/` in your browser.
   ```bash
   python tools/telemetry_feeder.py --multi 3 --rate 45 --hatch-interval 15
   ```
-- **Option B — In-Game Luau Telemetry Script:**
-  Open the **Connector** tab on the dashboard to copy or download `scripts/tap_sim_reborn_tracker.lua` pre-configured with your server URL.
+- **Option B — 1-Line Executor Loader (`loadstring`) for Public or Local Web:**
+  Open the **Connector** tab (unlock Admin if deployed publicly) and paste into your executor or `autoexec` folder:
+  ```lua
+  getgenv().TrackStats = {
+      Key = "YOUR_TRACKSTATS_KEY",
+      Interval = 2,
+  }
+  loadstring(game:HttpGet("https://<your-domain>/loader.lua"))()
+  ```
 - **Option C — Inbound Discord Webhook Bridge:**
-  POST Discord webhook embeds to `http://127.0.0.1:3883/api/v1/webhook/discord`.
+  POST Discord webhook embeds to `https://<your-domain>/api/v1/webhook/discord?key=YOUR_TRACKSTATS_KEY`.
+
+---
+
+## 2.5. Public Cloud Deployment (Railway 24/7)
+
+Included `Dockerfile` and `railway.toml` support 24/7 cloud hosting with a persistent SQLite volume (`/data/trackstats.db`) and public read-only view mode:
+
+- `TRACKSTATS_DB_PATH=/data/trackstats.db` — Persistent SQLite location on mounted Railway volume.
+- `TRACKSTATS_INGEST_KEY=<secret>` — Required in `X-TrackStats-Key` header (or `?key=`) for `/api/v1/telemetry`, `/api/v1/connector/inspect`, and `/api/v1/webhook/discord`.
+- `TRACKSTATS_ADMIN_PASSWORD=<secret>` — Locks account deletion, Discord webhook edits, DB restore/export, and reveals the live Ingest Key in the Connector tab.
+- `TRACKSTATS_PUBLIC_READ=true` — Allows anyone with the link to view the live dashboard & Secret Vault in read-only mode (`false` requires Admin sign-in to view).
 
 ---
 
