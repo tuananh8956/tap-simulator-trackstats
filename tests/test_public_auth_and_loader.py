@@ -159,3 +159,81 @@ def test_railway_packaging_files_exist():
     railway_toml = (BASE_DIR / "railway.toml").read_text(encoding="utf-8")
     assert "--proxy-headers" in dockerfile
     assert "/healthz" in railway_toml
+
+
+def test_non_ascii_auth_inputs_return_401_not_500(client, monkeypatch):
+    monkeypatch.setattr(settings, "admin_password", "admin_mật_khẩu", raising=False)
+    monkeypatch.setattr(settings, "ingest_key", "ts_khóa_123", raising=False)
+
+    # Non-ASCII wrong query key or login body must return 401 instead of crashing with TypeError
+    res_tele = client.post(
+        "/api/v1/telemetry?key=sai_khóa_🔥",
+        json={"userId": 81002, "currentTaps": 10, "totalTaps": 10},
+    )
+    assert res_tele.status_code == 401
+
+    res_login_bad = client.post("/api/v1/auth/login", json={"password": "sai_mật_khẩu_🔥"})
+    assert res_login_bad.status_code == 401
+
+    # Matching non-ASCII key & password succeed
+    res_tele_ok = client.post(
+        "/api/v1/telemetry?key=ts_khóa_123",
+        json={"userId": 81002, "currentTaps": 10, "totalTaps": 10},
+    )
+    assert res_tele_ok.status_code == 200
+
+    res_login_ok = client.post("/api/v1/auth/login", json={"password": "admin_mật_khẩu"})
+    assert res_login_ok.status_code == 200
+
+
+def test_connector_config_masks_ingest_key_when_admin_password_unset(client, monkeypatch):
+    monkeypatch.setattr(settings, "admin_password", "", raising=False)
+    monkeypatch.setattr(settings, "ingest_key", "ts_only_ingest_set", raising=False)
+
+    cfg = client.get("/api/v1/connector/config").json()
+    assert cfg["ingest_key_required"] is True
+    assert cfg["ingest_key"] is None
+
+
+def test_host_header_fallback_and_bad_endpoint_param_sanitized(client):
+    res = client.get(
+        "/loader.lua?endpoint=javascript:alert(1)",
+        headers={"Host": "evil.com'; while true do end --"},
+    )
+    assert res.status_code == 200
+    assert "while true do end" not in res.text
+    assert "javascript:alert" not in res.text
+    assert (
+        'ENDPOINT_URL = "http://127.0.0.1:3883/api/v1/telemetry"' in res.text
+        or 'ENDPOINT_URL = "http://testserver/api/v1/telemetry"' in res.text
+    )
+
+
+def test_parse_bool_fails_closed_on_invalid_truthy_typo():
+    from src.config import _parse_bool
+
+    assert _parse_bool("true") is True
+    assert _parse_bool("1") is True
+    assert _parse_bool("false") is False
+    assert _parse_bool("flase") is False
+    assert _parse_bool("private") is False
+
+
+def test_bearer_and_x_admin_password_headers_and_public_base_url(client, monkeypatch):
+    monkeypatch.setattr(settings, "admin_password", "hdr_admin_99", raising=False)
+    monkeypatch.setattr(settings, "ingest_key", "hdr_ingest_88", raising=False)
+    monkeypatch.setattr(settings, "public_base_url", "https://custom.trackstats.gg", raising=False)
+
+    # Authorization: Bearer works for telemetry
+    res_tele = client.post(
+        "/api/v1/telemetry",
+        json={"userId": 81003, "currentTaps": 5, "totalTaps": 5},
+        headers={"Authorization": "Bearer hdr_ingest_88"},
+    )
+    assert res_tele.status_code == 200
+
+    # X-Admin-Password works for admin routes & reveals ingest_key
+    cfg = client.get("/api/v1/connector/config", headers={"X-Admin-Password": "hdr_admin_99"}).json()
+    assert cfg["is_admin"] is True
+    assert cfg["ingest_key"] == "hdr_ingest_88"
+    assert cfg["base_url"] == "https://custom.trackstats.gg"

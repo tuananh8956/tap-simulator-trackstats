@@ -146,12 +146,8 @@ async function apiFetch(endpoint, options = {}) {
 
 // --- Initialization ---
 
-document.addEventListener("DOMContentLoaded", () => {
-  initDynamicEndpoints();
-  initChart();
-  setupEventListeners();
-  Promise.all([
-    loadAuthStatus(),
+async function loadDashboardData() {
+  await Promise.all([
     loadConnectorConfig(),
     loadOverview(),
     loadAccounts(),
@@ -160,10 +156,22 @@ document.addEventListener("DOMContentLoaded", () => {
     loadHatches(),
     loadAlertSettings(),
     loadInspectorReports(),
-  ]).finally(() => {
-    connectSSE();
-    if (window.lucide) lucide.createIcons();
-  });
+  ]);
+  connectSSE();
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+  initDynamicEndpoints();
+  initChart();
+  setupEventListeners();
+  await loadAuthStatus();
+  if (authState.auth_enabled && !authState.public_read && !authState.is_admin) {
+    const adminModal = document.getElementById("adminAuthModal");
+    adminModal?.classList.add("open", "gate-locked");
+  } else {
+    await loadDashboardData();
+  }
+  if (window.lucide) lucide.createIcons();
 });
 
 function initDynamicEndpoints() {
@@ -1097,13 +1105,17 @@ function setupEventListeners() {
     if (!activeUserId) return;
     const acc = accountsList.find((a) => a.user_id === activeUserId);
     const newState = acc ? !acc.is_tracking : false;
-    await apiFetch(`/api/v1/accounts/${activeUserId}/tracking`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ is_tracking: newState }),
-    });
-    await loadAccounts();
-    await loadLiveState(activeUserId);
+    try {
+      await apiFetch(`/api/v1/accounts/${activeUserId}/tracking`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_tracking: newState }),
+      });
+      await loadAccounts();
+      await loadLiveState(activeUserId);
+    } catch (err) {
+      showToast("Tracking toggle failed: " + err.message, "error");
+    }
   });
 
   // Add Account Modal
@@ -1269,13 +1281,17 @@ function setupEventListeners() {
   });
 
   document.getElementById("btnClearWebhook")?.addEventListener("click", async () => {
-    await apiFetch("/api/v1/settings/alerts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clearWebhook: true, enabled: false }),
-    });
-    await loadAlertSettings();
-    showToast("Discord Webhook URL cleared");
+    try {
+      await apiFetch("/api/v1/settings/alerts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clearWebhook: true, enabled: false }),
+      });
+      await loadAlertSettings();
+      showToast("Discord Webhook URL cleared");
+    } catch (err) {
+      showToast("Failed to clear webhook: " + err.message, "error");
+    }
   });
 
   // Multi-Account Matrix controls & event delegation
@@ -1295,23 +1311,31 @@ function setupEventListeners() {
   });
 
   document.getElementById("btnStartAll")?.addEventListener("click", async () => {
-    await apiFetch("/api/v1/accounts/tracking/all", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ is_tracking: true }),
-    });
-    await loadAccounts();
-    showToast("Tracking enabled for all accounts");
+    try {
+      await apiFetch("/api/v1/accounts/tracking/all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_tracking: true }),
+      });
+      await loadAccounts();
+      showToast("Tracking enabled for all accounts");
+    } catch (err) {
+      showToast("Failed to enable all: " + err.message, "error");
+    }
   });
 
   document.getElementById("btnPauseAll")?.addEventListener("click", async () => {
-    await apiFetch("/api/v1/accounts/tracking/all", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ is_tracking: false }),
-    });
-    await loadAccounts();
-    showToast("Tracking paused for all accounts");
+    try {
+      await apiFetch("/api/v1/accounts/tracking/all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_tracking: false }),
+      });
+      await loadAccounts();
+      showToast("Tracking paused for all accounts");
+    } catch (err) {
+      showToast("Failed to pause all: " + err.message, "error");
+    }
   });
 
   // Restore JSON Backup
@@ -1362,8 +1386,12 @@ function setupEventListeners() {
   };
   document.getElementById("btnAdminAuth")?.addEventListener("click", openAdminModal);
   document.getElementById("btnUnlockFromConnector")?.addEventListener("click", openAdminModal);
-  document.getElementById("btnCloseAdminModal")?.addEventListener("click", () => adminModal?.classList.remove("open"));
-  document.getElementById("btnCancelAdminModal")?.addEventListener("click", () => adminModal?.classList.remove("open"));
+  document.getElementById("btnCloseAdminModal")?.addEventListener("click", () => {
+    if (!adminModal?.classList.contains("gate-locked")) adminModal?.classList.remove("open");
+  });
+  document.getElementById("btnCancelAdminModal")?.addEventListener("click", () => {
+    if (!adminModal?.classList.contains("gate-locked")) adminModal?.classList.remove("open");
+  });
 
   document.getElementById("formAdminAuth")?.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1376,8 +1404,9 @@ function setupEventListeners() {
         body: JSON.stringify({ password }),
       });
       if (pwInput) pwInput.value = "";
-      adminModal?.classList.remove("open");
-      await Promise.all([loadAuthStatus(), loadConnectorConfig(), loadAlertSettings()]);
+      adminModal?.classList.remove("open", "gate-locked");
+      await loadAuthStatus();
+      await loadDashboardData();
       showToast("Admin unlocked! Your real Executor Key is now filled in Connector.");
     } catch (err) {
       showToast("Admin login failed: " + err.message, "error");
@@ -1385,10 +1414,20 @@ function setupEventListeners() {
   });
 
   document.getElementById("btnAdminLogout")?.addEventListener("click", async () => {
-    await apiFetch("/api/v1/auth/logout", { method: "POST" });
-    adminModal?.classList.remove("open");
-    await Promise.all([loadAuthStatus(), loadConnectorConfig()]);
-    showToast("Admin locked (View-Only mode)");
+    try {
+      await apiFetch("/api/v1/auth/logout", { method: "POST" });
+      await loadAuthStatus();
+      if (authState.auth_enabled && !authState.public_read) {
+        if (eventSource) eventSource.close();
+        adminModal?.classList.add("open", "gate-locked");
+      } else {
+        adminModal?.classList.remove("open");
+        await loadConnectorConfig();
+      }
+      showToast("Admin locked (View-Only mode)");
+    } catch (err) {
+      showToast("Logout failed: " + err.message, "error");
+    }
   });
 
   document.getElementById("btnCopyInboundWebhook")?.addEventListener("click", async () => {

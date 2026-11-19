@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from src.auth import (
     ADMIN_COOKIE_NAME,
+    constant_time_equals,
     create_admin_session_token,
     is_admin_request,
     require_admin,
@@ -188,7 +189,7 @@ async def get_auth_status(request: Request):
 @app.post("/api/v1/auth/login")
 async def admin_login(req: AdminLoginRequest, request: Request, response: Response):
     admin_pw = (settings.admin_password or "").strip()
-    if admin_pw and not hmac.compare_digest((req.password or "").strip(), admin_pw):
+    if admin_pw and not constant_time_equals((req.password or "").strip(), admin_pw):
         raise HTTPException(status_code=401, detail="Invalid admin password")
 
     base_url = resolve_public_base_url(request)
@@ -215,8 +216,10 @@ async def admin_logout(response: Response):
 @app.get("/api/v1/connector/config", dependencies=[Depends(require_read_access)])
 async def get_connector_config(request: Request):
     base_url = resolve_public_base_url(request)
-    is_admin = is_admin_request(request)
+    has_admin_pw = bool((settings.admin_password or "").strip())
+    is_admin = is_admin_request(request) if has_admin_pw else False
     ingest_key = (settings.ingest_key or "").strip()
+    can_reveal_key = bool(has_admin_pw and is_admin)
     return {
         "base_url": base_url,
         "telemetry_url": f"{base_url}/api/v1/telemetry",
@@ -224,8 +227,8 @@ async def get_connector_config(request: Request):
         "loader_url": f"{base_url}/loader.lua",
         "webhook_url": f"{base_url}/api/v1/webhook/discord",
         "ingest_key_required": bool(ingest_key),
-        "is_admin": is_admin,
-        "ingest_key": (ingest_key if is_admin else None) if ingest_key else "",
+        "is_admin": is_admin_request(request),
+        "ingest_key": (ingest_key if can_reveal_key else None) if ingest_key else "",
     }
 
 
@@ -372,11 +375,14 @@ async def get_luau_connector_script(request: Request, endpoint: Optional[str] = 
 
     lua_text = script_path.read_text(encoding="utf-8")
     base_url = resolve_public_base_url(request)
-    clean_ep = (endpoint or "").strip() or f"{base_url}/api/v1/telemetry"
-    if (
-        clean_ep.lower().startswith(("http://", "https://"))
-        and not any(ch in clean_ep for ch in ("\r", "\n", '"', "'", "\\", " "))
-    ):
+    raw_ep = (endpoint or "").strip()
+    is_safe_raw = bool(
+        raw_ep
+        and raw_ep.lower().startswith(("http://", "https://"))
+        and not any(ch in raw_ep for ch in ("\r", "\n", '"', "'", "\\", " "))
+    )
+    clean_ep = raw_ep if is_safe_raw else f"{base_url}/api/v1/telemetry"
+    if not any(ch in clean_ep for ch in ("\r", "\n", '"', "'", "\\", " ")):
         lua_text = re.sub(
             r'(ENDPOINT_URL\s*=\s*")[^"]*(")',
             lambda m: f"{m.group(1)}{clean_ep}{m.group(2)}",
@@ -384,7 +390,7 @@ async def get_luau_connector_script(request: Request, endpoint: Optional[str] = 
             count=1,
         )
         inspect_ep = re.sub(r"/api/v1/telemetry/?$", "/api/v1/connector/inspect", clean_ep)
-        if inspect_ep == clean_ep:
+        if inspect_ep == clean_ep or any(ch in inspect_ep for ch in ("\r", "\n", '"', "'", "\\", " ")):
             inspect_ep = f"{base_url}/api/v1/connector/inspect"
         lua_text = re.sub(
             r'(INSPECT_URL\s*=\s*")[^"]*(")',

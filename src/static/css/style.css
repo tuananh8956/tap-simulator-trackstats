@@ -1205,3 +1205,15 @@ table.data-table tr:hover td { background: rgba(255, 255, 255, 0.025); color: va
   justify-content: space-between;
   gap: 8px;
 }
+
+body.guest-readonly #btnAddAccount,
+body.guest-readonly #btnToggleTracking,
+body.guest-readonly #btnStartAll,
+body.guest-readonly #btnPauseAll {
+  opacity: 0.72;
+}
+
+#adminAuthModal.gate-locked #btnCloseAdminModal,
+#adminAuthModal.gate-locked #btnCancelAdminModal {
+  display: none !important;
+}

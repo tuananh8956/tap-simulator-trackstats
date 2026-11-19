@@ -10,6 +10,10 @@ ADMIN_COOKIE_NAME = "ts_admin_session"
 _SAFE_HOST_RE = re.compile(r"^[a-zA-Z0-9.\-:]+$")
 
 
+def constant_time_equals(a: str, b: str) -> bool:
+    return hmac.compare_digest((a or "").encode("utf-8"), (b or "").encode("utf-8"))
+
+
 def resolve_public_base_url(request: Request) -> str:
     """Resolve external public base URL respecting PUBLIC_BASE_URL and reverse proxy headers."""
     configured = (settings.public_base_url or "").strip().rstrip("/")
@@ -28,7 +32,8 @@ def resolve_public_base_url(request: Request) -> str:
     )
     host = host_hdr.split(",")[0].strip()
     if not _SAFE_HOST_RE.match(host):
-        host = request.url.netloc or "127.0.0.1:3883"
+        fallback_host = (request.url.netloc or "").strip()
+        host = fallback_host if _SAFE_HOST_RE.match(fallback_host) else "127.0.0.1:3883"
 
     return f"{scheme}://{host}".rstrip("/")
 
@@ -44,7 +49,7 @@ def verify_admin_session_token(token: Optional[str], password: str) -> bool:
     if not token:
         return False
     expected = create_admin_session_token(password)
-    return hmac.compare_digest(token.strip(), expected)
+    return constant_time_equals(token.strip(), expected)
 
 
 def is_admin_request(request: Request) -> bool:
@@ -57,7 +62,7 @@ def is_admin_request(request: Request) -> bool:
         return True
 
     header_pw = (request.headers.get("x-admin-password") or "").strip()
-    if header_pw and hmac.compare_digest(header_pw, admin_pw):
+    if header_pw and constant_time_equals(header_pw, admin_pw):
         return True
 
     return False
@@ -81,7 +86,7 @@ def require_ingest_key(request: Request) -> None:
     if not expected:
         return
 
-    # Also allow an authenticated admin session
+    # Also allow an authenticated admin session when admin_password is configured
     if (settings.admin_password or "").strip() and is_admin_request(request):
         return
 
@@ -93,5 +98,5 @@ def require_ingest_key(request: Request) -> None:
     if not provided:
         provided = (request.query_params.get("key") or "").strip()
 
-    if not provided or not hmac.compare_digest(provided, expected):
+    if not provided or not constant_time_equals(provided, expected):
         raise HTTPException(status_code=401, detail="Invalid or missing X-TrackStats-Key")
