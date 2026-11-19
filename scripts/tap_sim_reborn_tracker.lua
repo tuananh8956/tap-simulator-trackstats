@@ -13,7 +13,7 @@
 ===============================================================================
 ]]
 
-local SCRIPT_VERSION = "2.3.0"
+local SCRIPT_VERSION = "2.3.1"
 
 local CONFIG = {
     ENDPOINT_URL = "http://127.0.0.1:3883/api/v1/telemetry",
@@ -1353,22 +1353,76 @@ local function sendInspectorSnapshot()
     end
 
     if ReplicatedStorage then
-        pcall(function()
-            for _, child in ipairs(ReplicatedStorage:GetChildren()) do
-                local subNames = {}
-                for _, sc in ipairs(child:GetChildren()) do
-                    if #subNames < 30 then
-                        table.insert(subNames, sc.Name .. " (" .. sc.ClassName .. ")")
-                    end
+        dump.petModules = {}
+        local probePaths = {
+            "Controllers.Pets",
+            "Controllers.Core",
+            "Controllers.Common",
+            "Controllers.Game",
+            "Controllers.Items",
+            "Controllers.UI",
+            "Shared.Pets",
+            "Shared.Core",
+            "Shared.Items",
+            "Modules.Client",
+            "Content.Pets",
+        }
+        for _, relPath in ipairs(probePaths) do
+            pcall(function()
+                local cur = ReplicatedStorage
+                for seg in relPath:gmatch("[^%.]+") do
+                    cur = cur and cur:FindFirstChild(seg)
                 end
-                table.insert(dump.replicatedStorageItems, {
-                    name = child.Name,
-                    className = child.ClassName,
-                    children = #child:GetChildren(),
-                    subItems = subNames,
-                })
-            end
-        end)
+                if cur then
+                    local childrenInfo = {}
+                    for idx, ch in ipairs(cur:GetChildren()) do
+                        if idx <= 35 then
+                            local entry = { name = ch.Name, className = ch.ClassName }
+                            if ch:IsA("ModuleScript") and relPath ~= "Content.Pets" then
+                                local done = false
+                                local reqOk, reqRes = false, nil
+                                task.spawn(function()
+                                    reqOk, reqRes = pcall(require, ch)
+                                    done = true
+                                end)
+                                local waited = 0
+                                while not done and waited < 0.2 do
+                                    task.wait(0.02)
+                                    waited = waited + 0.02
+                                end
+                                if done and reqOk and type(reqRes) == "table" then
+                                    local keys = {}
+                                    local count = 0
+                                    for k, v in pairs(reqRes) do
+                                        count = count + 1
+                                        if count <= 30 then
+                                            local vDesc = type(v)
+                                            if type(v) == "table" then
+                                                local subKeys = {}
+                                                local sc = 0
+                                                for sk, sv in pairs(v) do
+                                                    sc = sc + 1
+                                                    if sc <= 12 then
+                                                        table.insert(subKeys, tostring(sk) .. ":" .. type(sv))
+                                                    end
+                                                end
+                                                vDesc = "table{" .. table.concat(subKeys, ",") .. "}"
+                                            elseif type(v) == "string" or type(v) == "number" or type(v) == "boolean" then
+                                                vDesc = tostring(v)
+                                            end
+                                            table.insert(keys, tostring(k) .. "=" .. vDesc)
+                                        end
+                                    end
+                                    entry.moduleKeys = keys
+                                end
+                            end
+                            table.insert(childrenInfo, entry)
+                        end
+                    end
+                    dump.petModules[relPath] = childrenInfo
+                end
+            end)
+        end
     end
 
     if type(getgc) == "function" then

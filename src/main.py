@@ -257,7 +257,7 @@ async def ingest_telemetry(payload: TelemetryPayload, request: Request):
         "tps": result.get("tps", 0.0),
         "secret_count": result.get("secret_count", 0),
         "new_hatches_count": len(result.get("new_hatches", [])),
-        "script_version": "2.3.0",
+        "script_version": "2.3.1",
     }
 
 
