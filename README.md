@@ -1,82 +1,35 @@
-# Tap Simulator Reborn – TrackStats System
+# Tap Simulator Reborn – TrackStats v2 System
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688.svg)](https://fastapi.tiangolo.com/)
 [![SQLite](https://img.shields.io/badge/SQLite-WAL%20Mode-003B57.svg)](https://sqlite.org/)
-[![Tests](https://img.shields.io/badge/Tests-25%20Passed-10b981.svg)](docs/test-report.md)
-[![Zero Exploit](https://img.shields.io/badge/Security-Zero%20Injection%20%2F%20No%20Cookies-00f2fe.svg)](#security--compliance)
+[![Zero Credentials](https://img.shields.io/badge/Security-No%20Cookies%20%2F%20Read--Only-00f2fe.svg)](#security--compliance)
 
-A dedicated, legitimate, high-performance **Real-Time Statistics Tracker and Live Dashboard** for the Roblox game **Tap Simulator Reborn** (Place ID: `72858262610964`, Universe ID: `10629695169`), inspired by the user experience and multi-account analytics of [YummyTrack](https://yummytrackstat.com).
-
-This tool is **NOT** an auto-farm bot or an exploit. It is an independent tracking and analytics companion that collects, processes, displays, and stores valid game statistics with zero memory injection, zero Roblox cookies, and zero risk of account moderation.
+A dedicated, high-performance **Real-Time Statistics Tracker, Secret Vault, and Multi-Account Dashboard** for **Tap Simulator Reborn** (Place ID: `72858262610964`, Universe ID: `10629695169`).
 
 ---
 
-## 1. Features
+## 1. Key Features (v2)
 
-- **Real-Time Stats Tracking**: Tracks Current Taps, Total Taps, Rebirths, Wins, Currency (Gems/Coins), and Session Playtime.
-- **True TPS Calculation**: High-precision sub-second rate engine calculating actual Taps Per Second ($\Delta \text{Taps} / \Delta t$) with automatic **rebirth anomaly protection** (preventing negative spikes when current taps reset).
-- **Rolling Growth Windows**: In-memory circular buffers computing rolling 1-minute, 5-minute, and 15-minute growth deltas for Taps and Currency.
-- **Pet Showcase**: Real-time tracking of equipped pets with color-coded rarity badges (Mythic, Legendary, Epic, Rare, Common), multipliers, and total Pet Power.
-- **Multi-Account Tracking Matrix**: Manage multiple Roblox accounts simultaneously via public User IDs. Includes side-by-side performance comparison, individual pause/resume, and batch "Track All / Pause All".
-- **Modern Dark Glassmorphism Dashboard**: Sleek, responsive web interface featuring Chart.js live time-series graphs, pulsing status badges, and instant account switching.
-- **Zero-Credential Security**: Does **not** require passwords, session tokens, or `.ROBLOSECURITY` cookies. Public player profiles and avatars are fetched directly from official Roblox Web APIs.
-- **Persistent SQLite Storage**: Automatically archives sessions, tracks performance trends, and supports single-click CSV/JSON export and database restore.
-- **Ultra-low Resource Footprint**: Asynchronous FastAPI core utilizing < 0.2% CPU at idle and < 35 MB RAM.
-
----
-
-## 2. Architecture & Data Sources
-
-```
-+---------------------------------------------------------------------------------+
-|                             USER INTERFACE                                      |
-|          Modern Dark Glassmorphism Dashboard (Chart.js & SSE Stream)            |
-+----------------------------------------+----------------------------------------+
-                                         | REST / Server-Sent Events (SSE)
-+----------------------------------------v----------------------------------------+
-|                          FASTAPI BACKEND SERVICE                                |
-|                                                                                 |
-|  +--------------------------------+     +------------------------------------+  |
-|  |     Roblox Public Poller       |     |      Telemetry Ingestion API       |  |
-|  |   - users.roblox.com           |     |      POST /api/v1/telemetry        |  |
-|  |   - presence.roblox.com        |     |      - In-game Taps, Pets, Wins    |  |
-|  |   - thumbnails.roblox.com      |     |      - Open REST contract          |  |
-|  +----------------+---------------+     +-----------------+------------------+  |
-|                   |                                       |                     |
-|  +----------------v---------------------------------------v------------------+  |
-|  |                       Session & Rate Engine                               |  |
-|  |   - Sub-second TPS calculation with Rebirth reset fallback                |  |
-|  |   - In-memory rolling circular buffer (1m, 5m, 15m)                       |  |
-|  |   - Authoritative heartbeat lifecycle (LIVE -> STALE -> DISCONNECTED)     |  |
-|  +--------------------------------+------------------------------------------+  |
-|                                   |                                             |
-|  +--------------------------------v------------------------------------------+  |
-|  |                    SQLite Persistent Storage                              |  |
-|  |   - Accounts, Sessions, and Time-Series Snapshots (WAL Mode)              |  |
-|  |   - CSV & JSON Exporters / Backup & Restore                               |  |
-|  +---------------------------------------------------------------------------+  |
-+---------------------------------------------------------------------------------+
-```
-
-### Data Source Transparency
-
-1. **Roblox Public Web APIs**:
-   - `https://users.roblox.com/v1/users/{userId}`: Fetches username and display name.
-   - `https://thumbnails.roblox.com/v1/users/avatar-headshot`: Fetches player avatar headshot.
-   - `https://presence.roblox.com/v1/presence/users`: Inspects public game presence (`Place ID 72858262610964`).
-   - Rate-limiting: Cached with a 5-second debounce and exponential backoff on HTTP 429.
-2. **Local Telemetry Ingestion Bridge**:
-   - Internal game stats (Taps, Currency, Rebirths, Pets) are server-authoritative in Roblox and not exposed on public web endpoints.
-   - The TrackStats companion provides an open local HTTP endpoint (`http://127.0.0.1:3883/api/v1/telemetry`) that accepts clean JSON payloads from local client tools or the included verification feeder.
+- **Secret Vault & Per-Secret Pet Images:**
+  - Tracks total Secret count across the entire farm and per account, grouped by **Secret Name** and **Variant** (`Normal`, `Golden`, `Diamond`, `Rainbow`, `Shiny`) plus Tier (`Secret I`, `Secret II`, `Secret III`, `Event`).
+  - **5-Step Image Pipeline:** Custom user image override -> safe telemetry URL -> automatic Roblox Asset Thumbnail resolution (`rbxassetid://<id>` via `thumbnails.roblox.com/v1/assets`) -> **18 bespoke SVG portraits** (`src/static/assets/pets/*.svg`) -> procedural SVG fallback (`/api/v1/pets/icon/{slug}.svg`).
+  - Click any Secret card to inspect which accounts hold it and customize its image URL or Roblox Asset ID.
+- **Redesigned 6-Tab Dark Cyber-Glass Website UI:**
+  - Persistent **Farm Overview KPI Strip** (Online Accounts, Total Secrets + variant breakdown, Farm TPS, Farm Taps/Currency, Total Eggs & Eggs/hr).
+  - Instant tabs: **Overview**, **Secret Vault**, **Hatch Feed & Discord Alerts**, **Multi-Account Matrix**, **History & Export/Restore**, and **Game Connector**.
+  - World/Island indicator, ticking Active Boosts countdown pills, WebAudio Secret hatch chime, and Chart.js live TPS stream.
+- **In-Game Read-Only Luau Telemetry Script (`scripts/tap_sim_reborn_tracker.lua`):**
+  - Strictly read-only telemetry observer (zero auto-tap/auto-hatch, zero cookie access).
+  - **AFK Closed-Inventory Guard:** Omits `secretPets` when your Pet Inventory UI is closed so AFK hatching never wipes your Secret Vault, while listening to read-only hatch popups/chat to update `recentHatches` & Secret counts live.
+  - **Inspector Mode (`INSPECT_ON_START = true`):** Posts discovered `leaderstats`, attributes, and `PlayerGui` paths to the Dashboard's Connector tab so you can tune `CONFIG.PATHS` after game updates.
+- **Bidirectional Discord Webhook Integration:**
+  - Outbound alerts for Secret Hatches (with pet thumbnail) and state-transition Disconnect (`60s`) / optional Stale (`15s`) alerts, with masked webhook tokens on `GET /api/v1/settings/alerts`.
+  - Inbound Discord-compatible bridge (`POST /api/v1/webhook/discord`) with username lookup and 15-second cross-source deduplication.
 
 ---
 
-## 3. Installation & Quick Start
-
-### Prerequisites
-- Python 3.10 or higher
-- Windows, macOS, or Linux
+## 2. Quick Start
 
 ### Step 1: Install Dependencies
 ```bash
@@ -87,89 +40,47 @@ pip install -r requirements.txt
 ```bash
 python run.py
 ```
-By default, the server starts on `http://127.0.0.1:3883/`. Open this URL in any web browser to access the Dark UI Dashboard.
+Open `http://127.0.0.1:3883/` in your browser.
 
-### Step 3: Run the Verification Telemetry Feeder
-In a separate terminal, launch the interactive telemetry feeder to simulate real-time gameplay telemetry and verify all live calculations:
-```bash
-python tools/telemetry_feeder.py --user-id 12345678 --rate 35 --interval 1.0
-```
-Options for the feeder:
-- `--rate <float>`: Target Taps Per Second (default: `25.0`).
-- `--interval <float>`: Telemetry update interval in seconds (default: `1.0`).
-- `--rebirth-interval <float>`: Simulates a rebirth event every N seconds (default: `90.0`).
-- `--user-id <int>`: Target Roblox User ID.
-- `--count <int>`: Number of updates to send before exiting (`-1` for continuous streaming).
-
----
-
-## 4. REST API Specification
-
-### Telemetry Ingestion
-- **`POST /api/v1/telemetry`**
-  ```json
-  {
-    "userId": 12345678,
-    "currentTaps": 1542000,
-    "totalTaps": 48200000,
-    "currentRebirths": 35,
-    "totalRebirths": 35,
-    "currentWins": 210,
-    "totalWins": 210,
-    "currentCurrency": 12500000,
-    "equippedPets": [
-      {
-        "id": "pet_1",
-        "name": "Dark Hydra",
-        "rarity": "Mythic",
-        "multiplier": 500.0,
-        "power": 12500.0
-      }
-    ],
-    "petInventoryCount": 42,
-    "totalPetPower": 150000.0,
-    "timestamp": 1794123456.78
-  }
+### Step 3: Stream Data (Choose One)
+- **Option A — Multi-Account Verification Feeder (Instant Local Demo):**
+  ```bash
+  python tools/telemetry_feeder.py --multi 3 --rate 45 --hatch-interval 15
   ```
-
-### Account & Session Management
-- **`GET /api/v1/accounts`**: Returns all registered accounts with live status and summaries.
-- **`POST /api/v1/accounts`**: Body `{"userId": 12345678}`. Adds an account (auto-fetches profile & avatar from Roblox).
-- **`DELETE /api/v1/accounts/{user_id}`**: Deletes an account and purges historical records.
-- **`POST /api/v1/accounts/{user_id}/tracking`**: Body `{"is_tracking": true/false}`. Toggles tracking for an account.
-- **`POST /api/v1/accounts/tracking/all`**: Body `{"is_tracking": true/false}`. Batch toggles tracking across all accounts.
-- **`GET /api/v1/accounts/{user_id}/live`**: Returns consolidated live stats, TPS, and 1m/5m/15m growth windows.
-- **`GET /api/v1/accounts/{user_id}/history`**: Retrieves past session records.
-
-### Data Export & Stream
-- **`GET /api/v1/export/csv`**: Downloads complete database export as CSV.
-- **`GET /api/v1/export/json`**: Downloads complete database export as JSON.
-- **`POST /api/v1/restore`**: Restores database state from JSON backup.
-- **`GET /api/v1/stream`**: Server-Sent Events (SSE) live push stream for the web dashboard.
+- **Option B — In-Game Luau Telemetry Script:**
+  Open the **Connector** tab on the dashboard to copy or download `scripts/tap_sim_reborn_tracker.lua` pre-configured with your server URL.
+- **Option C — Inbound Discord Webhook Bridge:**
+  POST Discord webhook embeds to `http://127.0.0.1:3883/api/v1/webhook/discord`.
 
 ---
 
-## 5. Security & Compliance
+## 3. REST API Overview
 
-This project was built strictly adhering to Roblox Terms of Service and clean companion standards:
-- **No Cookie Collection**: Never prompts for or stores `.ROBLOSECURITY`.
-- **No Password Reading**: Operates completely unauthenticated on the client side.
-- **No Memory Tampering**: Does not inject DLLs, inspect process memory, or hook game routines.
-- **No Spoofing or Exploit Code**: Built purely as an analytical observer and telemetry consumer.
+- `POST /api/v1/telemetry` — Ingest live stats, `secretPets`, `eggsHatched`, `world`, `activeBoosts`, `recentHatches`.
+- `GET /api/v1/overview` — Farm-wide aggregate KPIs.
+- `GET /api/v1/secrets?user_id=&variant=&tier=&q=` — Aggregated Secret Vault & owner breakdown.
+- `GET /api/v1/pets/catalog` & `POST /api/v1/pets/catalog/{slug}/image` — Browse catalog & override pet images.
+- `GET /api/v1/pets/icon/{slug}.svg` — Procedural fallback SVG portrait.
+- `GET /api/v1/hatches?limit=50&rarity=&user_id=` — Live Hatch Feed history.
+- `GET /api/v1/settings/alerts`, `POST /api/v1/settings/alerts`, `POST /api/v1/settings/alerts/test` — Outbound Discord alert settings (URL masked).
+- `POST /api/v1/webhook/discord` — Inbound Discord webhook receiver.
+- `GET /api/v1/connector/script.lua` — Download/serve configured `tap_sim_reborn_tracker.lua`.
+- `POST /api/v1/connector/inspect` & `GET /api/v1/connector/inspect` — Receive/view in-game hierarchy dumps.
+- `GET /api/v1/accounts`, `POST /api/v1/accounts`, `DELETE /api/v1/accounts/{user_id}`, `GET /api/v1/accounts/{user_id}/live`, `GET /api/v1/accounts/{user_id}/history`.
+- `GET /api/v1/export/csv`, `GET /api/v1/export/json`, `POST /api/v1/restore`, `GET /api/v1/stream` (SSE).
 
 ---
 
-## 6. Testing & Quality Assurance
+## 4. Security & Compliance
 
-Run the automated Pytest test suite:
+- **Zero Credentials:** Never reads, requests, or stores `.ROBLOSECURITY` cookies or passwords.
+- **Read-Only Telemetry Only:** Contains zero auto-farm, auto-click, auto-hatch, or remote-event exploit code.
+- **Notice on Third-Party Roblox Client Scripts:** Running third-party client scripts inside Roblox violates Roblox Terms of Service and carries account risk; use the included local feeder (`tools/telemetry_feeder.py`), Studio `HttpService` testing, or standard webhook ingestion if you want zero client interaction.
+
+---
+
+## 5. Testing
+
 ```bash
 pytest tests/ -v
 ```
-All 25 test cases cover:
-- Sub-second TPS calculation and Rebirth anomaly handling.
-- Private Roblox presence tolerance (telemetry-first authoritative lifecycle).
-- Multi-account state isolation and concurrency.
-- SQLite WAL mode session persistence and snapshot storage.
-- JSON/CSV data export and recovery.
-
-See [docs/test-report.md](docs/test-report.md) for the full verification report.
