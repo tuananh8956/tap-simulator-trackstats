@@ -105,3 +105,33 @@ def test_private_read_mode_blocks_guest_reads(client, monkeypatch):
     client.post("/api/v1/auth/login", json={"password": "lock_all_pw"})
     assert client.get("/api/v1/overview").status_code == 200
     assert client.get("/api/v1/secrets").status_code == 200
+
+
+def test_loader_lua_uses_forwarded_https_and_never_leaks_key(client, monkeypatch):
+    monkeypatch.setattr(settings, "ingest_key", "ts_super_secret_key", raising=False)
+    res = client.get(
+        "/loader.lua",
+        headers={
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Host": "tapsim-trackstats.up.railway.app",
+        },
+    )
+    assert res.status_code == 200
+    body = res.text
+    assert 'ENDPOINT_URL = "https://tapsim-trackstats.up.railway.app/api/v1/telemetry"' in body
+    assert 'INSPECT_URL = "https://tapsim-trackstats.up.railway.app/api/v1/connector/inspect"' in body
+    assert "ts_super_secret_key" not in body
+    assert "X-TrackStats-Key" in body
+    assert "getgenv" in body
+
+
+def test_loader_lua_rejects_malicious_host_header_injection(client):
+    res = client.get(
+        "/loader.lua",
+        headers={
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Host": 'evil.com"; while true do end --',
+        },
+    )
+    assert res.status_code == 200
+    assert "while true do end" not in res.text

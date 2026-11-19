@@ -16,6 +16,7 @@
 local CONFIG = {
     ENDPOINT_URL = "http://127.0.0.1:3883/api/v1/telemetry",
     INSPECT_URL = "http://127.0.0.1:3883/api/v1/connector/inspect",
+    API_KEY = "",
     SEND_INTERVAL = 2.0,
     INSPECT_ON_START = true,
     DEBUG_LOG = false,
@@ -35,6 +36,45 @@ local CONFIG = {
         BoostListGui = nil,
     },
 }
+
+-- Merge executor runtime config from getgenv().TrackStats or _G.TrackStats
+do
+    local envTbl = (type(getgenv) == "function" and getgenv()) or _G
+    local userCfg = (type(envTbl) == "table" and type(envTbl.TrackStats) == "table" and envTbl.TrackStats)
+        or (type(_G.TrackStats) == "table" and _G.TrackStats)
+        or {}
+
+    local rawKey = userCfg.Key or userCfg.key or (type(envTbl) == "table" and envTbl.TrackStatsKey) or _G.TrackStatsKey
+    if type(rawKey) == "string" and #rawKey > 0 then
+        CONFIG.API_KEY = rawKey
+    end
+    local rawBase = userCfg.BaseUrl or userCfg.baseUrl
+    if type(rawBase) == "string" and #rawBase > 0 then
+        local cleanBase = rawBase:gsub("/+$", "")
+        CONFIG.ENDPOINT_URL = cleanBase .. "/api/v1/telemetry"
+        CONFIG.INSPECT_URL = cleanBase .. "/api/v1/connector/inspect"
+    end
+    local rawEp = userCfg.Endpoint or userCfg.endpoint
+    if type(rawEp) == "string" and #rawEp > 0 then
+        CONFIG.ENDPOINT_URL = rawEp
+        CONFIG.INSPECT_URL = rawEp:gsub("/api/v1/telemetry/?$", "/api/v1/connector/inspect")
+    end
+    local rawInterval = tonumber(userCfg.Interval or userCfg.interval)
+    if rawInterval and rawInterval >= 1.0 then
+        CONFIG.SEND_INTERVAL = rawInterval
+    end
+    if type(userCfg.Inspect) == "boolean" then
+        CONFIG.INSPECT_ON_START = userCfg.Inspect
+    end
+    if type(userCfg.Debug) == "boolean" then
+        CONFIG.DEBUG_LOG = userCfg.Debug
+    end
+    if type(userCfg.Paths) == "table" then
+        for k, v in pairs(userCfg.Paths) do
+            CONFIG.PATHS[k] = v
+        end
+    end
+end
 
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
@@ -153,16 +193,34 @@ local function getHttpRequestFn()
     return nil
 end
 
+local lastAuthWarnAt = 0
+
 local function postJson(url, tableBody)
     local encoded = HttpService:JSONEncode(tableBody)
+    local headers = { ["Content-Type"] = "application/json" }
+    if type(CONFIG.API_KEY) == "string" and #CONFIG.API_KEY > 0 then
+        headers["X-TrackStats-Key"] = CONFIG.API_KEY
+    end
+
+    local function checkResp(ok, resp)
+        if ok and type(resp) == "table" then
+            local code = tonumber(resp.StatusCode or resp.Status)
+            if (code == 401 or code == 403) and (os.time() - lastAuthWarnAt >= 15) then
+                lastAuthWarnAt = os.time()
+                warn("[TrackStats] HTTP " .. tostring(code) .. " Unauthorized — set getgenv().TrackStats = { Key = \"YOUR_KEY\" } before loading!")
+            end
+        end
+    end
+
     local reqFn = getHttpRequestFn()
     if reqFn then
         local ok, resp = pcall(reqFn, {
             Url = url,
             Method = "POST",
-            Headers = { ["Content-Type"] = "application/json" },
+            Headers = headers,
             Body = encoded,
         })
+        checkResp(ok, resp)
         return ok, resp
     end
     -- Fallback for Roblox Studio HttpService testing
@@ -170,10 +228,11 @@ local function postJson(url, tableBody)
         return HttpService:RequestAsync({
             Url = url,
             Method = "POST",
-            Headers = { ["Content-Type"] = "application/json" },
+            Headers = headers,
             Body = encoded,
         })
     end)
+    checkResp(ok, resp)
     return ok, resp
 end
 

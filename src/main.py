@@ -363,33 +363,35 @@ async def ingest_discord_webhook(payload: Dict[str, Any]):
 # --- Game Connector & Luau Script endpoints (v2) ---
 
 
+@app.get("/loader.lua")
 @app.get("/api/v1/connector/script.lua")
-async def get_luau_connector_script(endpoint: Optional[str] = None):
+async def get_luau_connector_script(request: Request, endpoint: Optional[str] = None):
     script_path = BASE_DIR / "scripts" / "tap_sim_reborn_tracker.lua"
     if not script_path.exists():
         raise HTTPException(status_code=404, detail="Luau connector script not found")
 
     lua_text = script_path.read_text(encoding="utf-8")
-    if endpoint:
-        clean_ep = endpoint.strip()
-        if (
-            clean_ep.lower().startswith(("http://", "https://"))
-            and not any(ch in clean_ep for ch in ("\r", "\n", '"', "'", "\\"))
-        ):
-            lua_text = re.sub(
-                r'(ENDPOINT_URL\s*=\s*")[^"]*(")',
-                lambda m: f"{m.group(1)}{clean_ep}{m.group(2)}",
-                lua_text,
-                count=1,
-            )
-            inspect_ep = re.sub(r"/api/v1/telemetry/?$", "/api/v1/connector/inspect", clean_ep)
-            if inspect_ep != clean_ep:
-                lua_text = re.sub(
-                    r'(INSPECT_URL\s*=\s*")[^"]*(")',
-                    lambda m: f"{m.group(1)}{inspect_ep}{m.group(2)}",
-                    lua_text,
-                    count=1,
-                )
+    base_url = resolve_public_base_url(request)
+    clean_ep = (endpoint or "").strip() or f"{base_url}/api/v1/telemetry"
+    if (
+        clean_ep.lower().startswith(("http://", "https://"))
+        and not any(ch in clean_ep for ch in ("\r", "\n", '"', "'", "\\", " "))
+    ):
+        lua_text = re.sub(
+            r'(ENDPOINT_URL\s*=\s*")[^"]*(")',
+            lambda m: f"{m.group(1)}{clean_ep}{m.group(2)}",
+            lua_text,
+            count=1,
+        )
+        inspect_ep = re.sub(r"/api/v1/telemetry/?$", "/api/v1/connector/inspect", clean_ep)
+        if inspect_ep == clean_ep:
+            inspect_ep = f"{base_url}/api/v1/connector/inspect"
+        lua_text = re.sub(
+            r'(INSPECT_URL\s*=\s*")[^"]*(")',
+            lambda m: f"{m.group(1)}{inspect_ep}{m.group(2)}",
+            lua_text,
+            count=1,
+        )
 
     return Response(
         content=lua_text,

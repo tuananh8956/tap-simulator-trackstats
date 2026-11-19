@@ -232,6 +232,7 @@ def run_feeder(
     rebirth_interval_sec: float,
     hatch_interval_sec: float = 20.0,
     count: int = -1,
+    ingest_key: str = "",
 ):
     print("=" * 72)
     print("  TAP SIMULATOR REBORN – TRACKSTATS v2 TELEMETRY FEEDER")
@@ -247,7 +248,8 @@ def run_feeder(
     sent = 0
     last_rebirth = time.time()
     last_hatch = time.time()
-    client = httpx.Client(timeout=5.0)
+    headers = {"X-TrackStats-Key": ingest_key} if ingest_key else {}
+    client = httpx.Client(timeout=5.0, headers=headers)
 
     try:
         while count < 0 or sent < count:
@@ -305,6 +307,7 @@ def main():
     parser.add_argument("--rebirth-interval", type=float, default=90.0, help="Simulate rebirth every N seconds")
     parser.add_argument("--hatch-interval", type=float, default=18.0, help="Simulate Secret hatch every N seconds")
     parser.add_argument("--count", type=int, default=-1, help="Number of ticks (-1 for infinite)")
+    parser.add_argument("--key", type=str, default="", help="Optional X-TrackStats-Key for protected servers")
     args = parser.parse_args()
 
     if args.accounts.strip():
@@ -314,6 +317,9 @@ def main():
     else:
         user_ids = [args.user_id]
 
+    import os
+    ingest_key = args.key.strip() or os.environ.get("TRACKSTATS_INGEST_KEY", "").strip()
+
     run_feeder(
         url=args.url,
         user_ids=user_ids,
@@ -322,6 +328,7 @@ def main():
         rebirth_interval_sec=args.rebirth_interval,
         hatch_interval_sec=args.hatch_interval,
         count=args.count,
+        ingest_key=ingest_key,
     )
 
 
