@@ -3,260 +3,645 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Tap Simulator Reborn – TrackStats</title>
+  <title>Tap Simulator Reborn – TrackStats v2</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 <body>
+  <div class="bg-orb orb-cyan"></div>
+  <div class="bg-orb orb-violet"></div>
+  <div class="bg-orb orb-emerald"></div>
+
   <div class="container">
-    <!-- Navbar / Header -->
+    <!-- Top Command Navbar -->
     <header class="navbar">
       <div class="brand">
         <div class="brand-icon">
-          <i data-lucide="zap" style="color: #000; width: 22px; height: 22px;"></i>
+          <i data-lucide="zap" style="color: #030712; width: 22px; height: 22px;"></i>
         </div>
         <div>
           <div class="brand-title">Tap Simulator Reborn</div>
-          <div class="brand-subtitle">TrackStats System &bull; Live Telemetry</div>
+          <div class="brand-subtitle">TrackStats v2 &bull; Secret Vault &amp; Live Telemetry</div>
         </div>
       </div>
 
       <div class="nav-controls">
         <div class="account-selector-wrap">
-          <select id="accountSelect" class="account-select">
+          <select id="accountSelect" class="account-select" aria-label="Select Account">
             <option value="">Loading accounts...</option>
           </select>
           <button id="btnAddAccount" class="btn btn-secondary">
-            <i data-lucide="user-plus" style="width: 16px; height: 16px;"></i> Add Account
+            <i data-lucide="user-plus" style="width: 15px; height: 15px;"></i> Add Account
           </button>
         </div>
 
         <button id="btnToggleTracking" class="btn btn-toggle-tracking active">
-          <i data-lucide="pause" style="width: 16px; height: 16px;"></i> Tracking Active
+          <i data-lucide="pause" style="width: 15px; height: 15px;"></i> Pause Tracking
         </button>
 
-        <div id="connectionStatusBadge" class="status-badge disconnected">
+        <button id="btnSoundToggle" class="btn btn-icon-toggle" title="Toggle Secret Hatch Sound Alert">
+          <i data-lucide="volume-2" style="width: 16px; height: 16px;"></i>
+        </button>
+
+        <div id="connectionStatusBadge" class="status-badge idle">
           <span class="status-dot"></span>
-          <span id="statusText">WAITING</span>
+          <span id="statusText">IDLE</span>
         </div>
       </div>
     </header>
 
-    <!-- Top Section: Player Overview + Live Statistics Cards -->
-    <div class="grid-top">
-      <!-- Player Overview Card -->
-      <div class="card player-box">
-        <div class="player-avatar-wrap">
-          <img id="playerAvatar" class="player-avatar" src="" alt="Avatar" />
+    <!-- 6-Tab View Switcher -->
+    <nav class="tab-bar" role="tablist">
+      <button class="tab-btn active" data-tab="overview">
+        <i data-lucide="layout-dashboard" style="width: 16px; height: 16px;"></i>
+        <span>Overview</span>
+      </button>
+      <button class="tab-btn" data-tab="secrets">
+        <i data-lucide="sparkles" style="width: 16px; height: 16px;"></i>
+        <span>Secret Vault</span>
+        <span id="tabSecretBadge" class="tab-badge">0</span>
+      </button>
+      <button class="tab-btn" data-tab="hatches">
+        <i data-lucide="egg" style="width: 16px; height: 16px;"></i>
+        <span>Hatch Feed</span>
+      </button>
+      <button class="tab-btn" data-tab="accounts">
+        <i data-lucide="users" style="width: 16px; height: 16px;"></i>
+        <span>Multi-Account</span>
+        <span id="tabAccBadge" class="tab-badge tab-badge-cyan">0</span>
+      </button>
+      <button class="tab-btn" data-tab="history">
+        <i data-lucide="history" style="width: 16px; height: 16px;"></i>
+        <span>History &amp; Export</span>
+      </button>
+      <button class="tab-btn" data-tab="connector">
+        <i data-lucide="plug-zap" style="width: 16px; height: 16px;"></i>
+        <span>Connector</span>
+      </button>
+    </nav>
+
+    <!-- Persistent Farm Overview KPI Strip -->
+    <section class="farm-kpi-strip" aria-label="Farm Overview">
+      <div class="kpi-card kpi-live">
+        <div class="kpi-label">Accounts Online</div>
+        <div id="farmAccountsOnline" class="kpi-value mono">0 / 0</div>
+        <div id="farmAccountsBreakdown" class="kpi-sub">Waiting for telemetry</div>
+      </div>
+
+      <div class="kpi-card kpi-secret" id="kpiSecretShortcut" title="Click to open Secret Vault">
+        <div class="kpi-label">Total Farm Secrets</div>
+        <div id="farmTotalSecrets" class="kpi-value mono highlight-secret">0</div>
+        <div id="farmSecretVariants" class="kpi-pills"></div>
+      </div>
+
+      <div class="kpi-card kpi-tps">
+        <div class="kpi-label">Farm Live TPS</div>
+        <div id="farmTotalTps" class="kpi-value mono highlight-green">0.0</div>
+        <div class="kpi-sub">Combined across all accounts</div>
+      </div>
+
+      <div class="kpi-card kpi-taps">
+        <div class="kpi-label">Farm Taps &amp; Currency</div>
+        <div id="farmTotalTaps" class="kpi-value mono highlight-cyan">0</div>
+        <div id="farmTotalCurrency" class="kpi-sub">Currency: 0 &bull; Rebirths: 0</div>
+      </div>
+
+      <div class="kpi-card kpi-eggs">
+        <div class="kpi-label">Total Eggs Hatched</div>
+        <div id="farmTotalEggs" class="kpi-value mono">0</div>
+        <div id="farmEggsPerHour" class="kpi-sub">0 eggs/hr</div>
+      </div>
+    </section>
+
+    <!-- ================================================================ -->
+    <!-- VIEW 1: OVERVIEW (LIVE TELEMETRY CONSOLE)                         -->
+    <!-- ================================================================ -->
+    <main id="view-overview" class="view-panel active">
+      <div class="grid-top">
+        <!-- Active Player Overview Card -->
+        <div class="card player-box">
+          <div class="player-avatar-wrap">
+            <img id="playerAvatar" class="player-avatar" src="" alt="Avatar" />
+            <span id="playerClientBadge" class="client-source-pill">TELEMETRY</span>
+          </div>
+          <div>
+            <div id="playerName" class="player-name">--</div>
+            <div id="playerUserId" class="player-meta">@-- (ID: --)</div>
+          </div>
+          <div class="player-badges-stack">
+            <div class="player-game-badge">
+              <i data-lucide="gamepad-2" style="width: 14px; height: 14px;"></i>
+              <span>Tap Simulator REBORN (72858262610964)</span>
+            </div>
+            <div class="world-badge">
+              <i data-lucide="globe" style="width: 14px; height: 14px;"></i>
+              <span>World: <strong id="playerWorld">Unknown</strong></span>
+            </div>
+            <div class="playtime-badge">
+              <i data-lucide="clock" style="width: 14px; height: 14px;"></i>
+              <span>Session: <strong id="sessionDuration" class="mono">00:00:00</strong></span>
+            </div>
+          </div>
+
+          <div class="boosts-section">
+            <div class="boosts-title">
+              <i data-lucide="flask-conical" style="width: 13px; height: 13px;"></i>
+              Active Boosts &amp; Potions
+            </div>
+            <div id="activeBoostsList" class="boosts-list">
+              <span class="boost-empty">No active boosts</span>
+            </div>
+          </div>
         </div>
-        <div>
-          <div id="playerName" class="player-name">--</div>
-          <div id="playerUserId" class="player-meta">@-- (ID: --)</div>
-        </div>
-        <div class="player-game-badge">
-          Tap Simulator REBORN (Place: 72858262610964)
-        </div>
-        <div class="playtime-badge">
-          <i data-lucide="clock" style="width: 16px; height: 16px;"></i>
-          <span>Session Playtime: <strong id="sessionDuration">00:00:00</strong></span>
+
+        <!-- Live Statistics & Rolling Growth -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <i data-lucide="activity" style="color: var(--cyan-glow); width: 18px; height: 18px;"></i>
+              Live Statistics
+            </div>
+            <span class="meta-pill">Auto-stream via SSE</span>
+          </div>
+
+          <div class="stats-grid">
+            <div class="stat-item tps-item">
+              <div class="stat-label">Real-time TPS</div>
+              <div id="statTps" class="stat-value mono highlight-green">0.0</div>
+              <div id="statMaxTps" class="stat-sub">Max: 0.0 | Avg: 0.0</div>
+            </div>
+
+            <div class="stat-item secret-item">
+              <div class="stat-label">Secrets Owned</div>
+              <div id="statSecrets" class="stat-value mono highlight-secret">0</div>
+              <div id="statSecretsSub" class="stat-sub">Active account vault</div>
+            </div>
+
+            <div class="stat-item">
+              <div class="stat-label">Current Taps</div>
+              <div id="statCurrentTaps" class="stat-value mono highlight-cyan">0</div>
+              <div class="stat-sub">This Rebirth</div>
+            </div>
+
+            <div class="stat-item">
+              <div class="stat-label">Total Taps</div>
+              <div id="statTotalTaps" class="stat-value mono">0</div>
+              <div class="stat-sub">Lifetime Gained</div>
+            </div>
+
+            <div class="stat-item">
+              <div class="stat-label">Rebirths</div>
+              <div id="statCurrentRebirths" class="stat-value mono">0</div>
+              <div class="stat-sub">Multiplier Tier</div>
+            </div>
+
+            <div class="stat-item">
+              <div class="stat-label">Wins</div>
+              <div id="statWins" class="stat-value mono">0</div>
+              <div class="stat-sub">Total Wins</div>
+            </div>
+
+            <div class="stat-item">
+              <div class="stat-label">Currency</div>
+              <div id="statCurrency" class="stat-value mono">0</div>
+              <div class="stat-sub">Gems &bull; Coins</div>
+            </div>
+
+            <div class="stat-item eggs-item">
+              <div class="stat-label">Eggs Hatched</div>
+              <div id="statEggsHatched" class="stat-value mono">0</div>
+              <div id="statEggsRate" class="stat-sub">0 eggs/hr</div>
+            </div>
+          </div>
+
+          <!-- Rolling Growth Panel (1m, 5m, 15m) -->
+          <div class="growth-grid">
+            <div class="growth-card">
+              <div class="growth-header">
+                <span>1-Minute Growth</span>
+                <span id="growth1mTps" class="mono">0.0 TPS</span>
+              </div>
+              <div class="growth-row">
+                <span>Taps Gained</span>
+                <span id="growth1mTaps" class="mono">+0</span>
+              </div>
+              <div class="growth-row">
+                <span>Currency Gained</span>
+                <span id="growth1mCurrency" class="mono">+0</span>
+              </div>
+            </div>
+
+            <div class="growth-card">
+              <div class="growth-header">
+                <span>5-Minute Growth</span>
+                <span id="growth5mTps" class="mono">0.0 TPS</span>
+              </div>
+              <div class="growth-row">
+                <span>Taps Gained</span>
+                <span id="growth5mTaps" class="mono">+0</span>
+              </div>
+              <div class="growth-row">
+                <span>Currency Gained</span>
+                <span id="growth5mCurrency" class="mono">+0</span>
+              </div>
+            </div>
+
+            <div class="growth-card">
+              <div class="growth-header">
+                <span>15-Minute Growth</span>
+                <span id="growth15mTps" class="mono">0.0 TPS</span>
+              </div>
+              <div class="growth-row">
+                <span>Taps Gained</span>
+                <span id="growth15mTaps" class="mono">+0</span>
+              </div>
+              <div class="growth-row">
+                <span>Currency Gained</span>
+                <span id="growth15mCurrency" class="mono">+0</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
-      <!-- Live Statistics & Progress Cards -->
-      <div class="card">
+      <!-- Active Account Secret Showcase Preview -->
+      <div class="card section-gap">
         <div class="card-header">
           <div class="card-title">
-            <i data-lucide="activity" style="color: var(--cyan-glow); width: 18px; height: 18px;"></i>
-            Live Statistics
+            <i data-lucide="sparkles" style="color: var(--secret-glow); width: 18px; height: 18px;"></i>
+            Account Secret Pets
           </div>
-          <span style="font-size: 0.78rem; color: var(--text-dim);">Auto-refreshed via SSE</span>
+          <button class="btn btn-secondary btn-sm" id="btnJumpToVault">
+            Open Full Secret Vault &rarr;
+          </button>
         </div>
+        <div id="overviewSecretsGrid" class="secret-cards-grid compact">
+          <div class="empty-state">No Secret pets recorded for this account yet.</div>
+        </div>
+      </div>
 
-        <div class="stats-grid">
-          <div class="stat-item tps-item">
-            <div class="stat-label">Real-time TPS</div>
-            <div id="statTps" class="stat-value highlight-green">0.0</div>
-            <div id="statMaxTps" class="stat-sub">Max: 0.0 | Avg: 0.0</div>
+      <!-- Live TPS Chart -->
+      <div class="card section-gap">
+        <div class="card-header">
+          <div class="card-title">
+            <i data-lucide="trending-up" style="color: var(--cyan-glow); width: 18px; height: 18px;"></i>
+            Real-time TPS &amp; Taps Progression
           </div>
+          <span class="meta-pill">Live Sub-second Stream</span>
+        </div>
+        <div class="chart-container">
+          <canvas id="tpsChart"></canvas>
+        </div>
+      </div>
 
-          <div class="stat-item">
-            <div class="stat-label">Current Taps</div>
-            <div id="statCurrentTaps" class="stat-value highlight-cyan">0</div>
-            <div class="stat-sub">This Rebirth</div>
+      <!-- Equipped Pets + Mini Hatch Feed -->
+      <div class="grid-two-col">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <i data-lucide="paw-print" style="color: var(--cyan-glow); width: 18px; height: 18px;"></i>
+              Equipped Pets &amp; Inventory Overview
+            </div>
+            <span id="totalPetPower" class="meta-pill">Total Power: 0</span>
           </div>
-
-          <div class="stat-item">
-            <div class="stat-label">Total Taps</div>
-            <div id="statTotalTaps" class="stat-value">0</div>
-            <div class="stat-sub">Lifetime Gained</div>
-          </div>
-
-          <div class="stat-item">
-            <div class="stat-label">Rebirths</div>
-            <div id="statCurrentRebirths" class="stat-value">0</div>
-            <div class="stat-sub">Current Multiplier Tier</div>
-          </div>
-
-          <div class="stat-item">
-            <div class="stat-label">Wins</div>
-            <div id="statWins" class="stat-value">0</div>
-            <div class="stat-sub">Total Wins Earned</div>
-          </div>
-
-          <div class="stat-item">
-            <div class="stat-label">Currency</div>
-            <div id="statCurrency" class="stat-value">0</div>
-            <div class="stat-sub">Gems &bull; Coins</div>
+          <div id="petsGrid" class="pets-grid">
+            <div class="empty-state">Waiting for telemetry...</div>
           </div>
         </div>
 
-        <!-- Growth Rates Panel (1m, 5m, 15m) -->
-        <div class="growth-grid">
-          <div class="growth-card">
-            <div class="growth-header">
-              <span>1-Minute Growth</span>
-              <span id="growth1mTps">0.0 TPS</span>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <i data-lucide="flame" style="color: var(--amber-glow); width: 18px; height: 18px;"></i>
+              Recent Secret Hatches
             </div>
-            <div class="growth-row">
-              <span>Taps Gained:</span>
-              <span id="growth1mTaps">+0</span>
+            <button class="btn btn-secondary btn-sm" id="btnJumpToHatches">View All</button>
+          </div>
+          <div id="miniHatchFeed" class="hatch-feed-list">
+            <div class="empty-state">No hatch events recorded yet.</div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- ================================================================ -->
+    <!-- VIEW 2: SECRET VAULT (KHO SECRET + PER-PET IMAGES)                -->
+    <!-- ================================================================ -->
+    <section id="view-secrets" class="view-panel">
+      <div class="card section-gap">
+        <div class="card-header wrap-header">
+          <div class="card-title">
+            <i data-lucide="sparkles" style="color: var(--secret-glow); width: 18px; height: 18px;"></i>
+            Secret Vault &amp; Image Catalog
+          </div>
+          <div class="vault-mode-toggle">
+            <button id="btnVaultModeOwned" class="pill-btn active">Owned Secrets</button>
+            <button id="btnVaultModeCatalog" class="pill-btn">All 18 Catalog Secrets</button>
+          </div>
+        </div>
+
+        <div id="vaultSummaryBar" class="vault-summary-bar"></div>
+
+        <div class="filter-toolbar">
+          <div class="search-box">
+            <i data-lucide="search" style="width: 15px; height: 15px; color: var(--text-dim);"></i>
+            <input id="secretSearchInput" type="text" placeholder="Search Secret name, egg, or owner..." />
+          </div>
+
+          <select id="secretAccountFilter" class="filter-select" aria-label="Filter by Account">
+            <option value="">All Accounts</option>
+          </select>
+
+          <select id="secretTierFilter" class="filter-select" aria-label="Filter by Tier">
+            <option value="all">All Tiers</option>
+            <option value="Secret III">Secret III</option>
+            <option value="Secret II">Secret II</option>
+            <option value="Secret I">Secret I</option>
+            <option value="Event">Event</option>
+          </select>
+
+          <select id="secretSortSelect" class="filter-select" aria-label="Sort Secrets">
+            <option value="count">Sort: Quantity</option>
+            <option value="power">Sort: Max Power</option>
+            <option value="multiplier">Sort: Multiplier</option>
+            <option value="name">Sort: Name A–Z</option>
+          </select>
+        </div>
+
+        <div id="variantFilterPills" class="variant-pills-bar">
+          <button class="pill-btn active" data-variant="all">All Variants</button>
+          <button class="pill-btn pill-rainbow" data-variant="Rainbow">Rainbow</button>
+          <button class="pill-btn pill-golden" data-variant="Golden">Golden</button>
+          <button class="pill-btn pill-diamond" data-variant="Diamond">Diamond</button>
+          <button class="pill-btn pill-shiny" data-variant="Shiny">Shiny</button>
+          <button class="pill-btn" data-variant="Normal">Normal</button>
+        </div>
+
+        <div id="secretVaultGrid" class="secret-cards-grid">
+          <div class="empty-state">Loading Secret Vault...</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================================ -->
+    <!-- VIEW 3: LIVE HATCH FEED & DISCORD ALERTS                          -->
+    <!-- ================================================================ -->
+    <section id="view-hatches" class="view-panel">
+      <div class="grid-hatch-layout">
+        <div class="card">
+          <div class="card-header wrap-header">
+            <div class="card-title">
+              <i data-lucide="egg" style="color: var(--secret-glow); width: 18px; height: 18px;"></i>
+              Live Hatch Feed
             </div>
-            <div class="growth-row">
-              <span>Currency Gained:</span>
-              <span id="growth1mCurrency">+0</span>
+            <div class="toolbar-inline">
+              <select id="hatchRarityFilter" class="filter-select">
+                <option value="">All Rarities</option>
+                <option value="Secret">Secret Only</option>
+                <option value="Mythic">Mythic</option>
+              </select>
+              <button id="btnTestSound" class="btn btn-secondary btn-sm">
+                <i data-lucide="bell-ring" style="width: 14px; height: 14px;"></i> Test Chime
+              </button>
             </div>
           </div>
 
-          <div class="growth-card">
-            <div class="growth-header">
-              <span>5-Minute Growth</span>
-              <span id="growth5mTps">0.0 TPS</span>
+          <div id="fullHatchFeedList" class="hatch-feed-list">
+            <div class="empty-state">Waiting for hatch events...</div>
+          </div>
+        </div>
+
+        <div class="alerts-sidebar">
+          <div class="card section-gap">
+            <div class="card-header">
+              <div class="card-title">
+                <i data-lucide="bell" style="color: var(--cyan-glow); width: 18px; height: 18px;"></i>
+                Discord Webhook Alerts
+              </div>
+              <span id="webhookStatusPill" class="meta-pill">Not Configured</span>
             </div>
-            <div class="growth-row">
-              <span>Taps Gained:</span>
-              <span id="growth5mTaps">+0</span>
-            </div>
-            <div class="growth-row">
-              <span>Currency Gained:</span>
-              <span id="growth5mCurrency">+0</span>
-            </div>
+
+            <form id="discordWebhookForm" class="settings-form">
+              <div class="form-group">
+                <label class="form-label" for="inputWebhookUrl">Discord Webhook URL</label>
+                <input id="inputWebhookUrl" class="form-input" type="text" placeholder="https://discord.com/api/webhooks/..." />
+                <div class="form-hint">Token is masked after saving. Leave untouched to preserve existing webhook.</div>
+              </div>
+
+              <label class="toggle-row">
+                <input id="chkAlertsEnabled" type="checkbox" />
+                <span>Enable Outbound Discord Alerts</span>
+              </label>
+
+              <label class="toggle-row">
+                <input id="chkNotifySecret" type="checkbox" checked />
+                <span>Notify on Secret Pet Hatch</span>
+              </label>
+
+              <label class="toggle-row">
+                <input id="chkNotifyDisconnect" type="checkbox" checked />
+                <span>Notify on Account Disconnect (60s)</span>
+              </label>
+
+              <label class="toggle-row">
+                <input id="chkNotifyStale" type="checkbox" />
+                <span>Notify on Account Stale (15s)</span>
+              </label>
+
+              <label class="toggle-row">
+                <input id="chkForwardInbound" type="checkbox" />
+                <span>Forward Inbound Webhook Bridge to Discord</span>
+              </label>
+
+              <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Save Settings</button>
+                <button type="button" id="btnTestWebhook" class="btn btn-secondary">Test Alert</button>
+                <button type="button" id="btnClearWebhook" class="btn btn-danger-ghost">Clear URL</button>
+              </div>
+            </form>
           </div>
 
-          <div class="growth-card">
-            <div class="growth-header">
-              <span>15-Minute Growth</span>
-              <span id="growth15mTps">0.0 TPS</span>
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">
+                <i data-lucide="webhook" style="color: var(--purple-glow); width: 18px; height: 18px;"></i>
+                Inbound Webhook Bridge
+              </div>
             </div>
-            <div class="growth-row">
-              <span>Taps Gained:</span>
-              <span id="growth15mTaps">+0</span>
-            </div>
-            <div class="growth-row">
-              <span>Currency Gained:</span>
-              <span id="growth15mCurrency">+0</span>
+            <p class="muted-copy">
+              Send Discord-format hatch embeds directly to this local endpoint to populate your Live Hatch Feed automatically:
+            </p>
+            <div class="copy-field">
+              <code id="inboundWebhookUrl">http://127.0.0.1:3883/api/v1/webhook/discord</code>
+              <button type="button" class="btn btn-secondary btn-sm" id="btnCopyInboundWebhook">Copy</button>
             </div>
           </div>
         </div>
       </div>
-    </div>
+    </section>
 
-    <!-- Chart Section: Live TPS & Progress -->
-    <div class="card" style="margin-bottom: 24px;">
-      <div class="card-header">
-        <div class="card-title">
-          <i data-lucide="trending-up" style="color: var(--cyan-glow); width: 18px; height: 18px;"></i>
-          Real-time TPS & Taps Progression
+    <!-- ================================================================ -->
+    <!-- VIEW 4: MULTI-ACCOUNT MATRIX PRO                                  -->
+    <!-- ================================================================ -->
+    <section id="view-accounts" class="view-panel">
+      <div class="card">
+        <div class="card-header wrap-header">
+          <div class="card-title">
+            <i data-lucide="users" style="color: var(--cyan-glow); width: 18px; height: 18px;"></i>
+            Multi-Account Tracking Matrix
+          </div>
+          <div class="toolbar-inline">
+            <div class="search-box compact">
+              <i data-lucide="search" style="width: 14px; height: 14px; color: var(--text-dim);"></i>
+              <input id="accountSearchInput" type="text" placeholder="Filter account or world..." />
+            </div>
+            <select id="accountStatusFilter" class="filter-select">
+              <option value="all">All Status</option>
+              <option value="LIVE">LIVE</option>
+              <option value="STALE">STALE</option>
+              <option value="DISCONNECTED">DISCONNECTED</option>
+              <option value="PAUSED">PAUSED</option>
+              <option value="IDLE">IDLE</option>
+            </select>
+            <button id="btnStartAll" class="btn btn-secondary btn-sm">Track All</button>
+            <button id="btnPauseAll" class="btn btn-secondary btn-sm">Pause All</button>
+          </div>
         </div>
-        <span style="font-size: 0.78rem; color: var(--text-dim);">Live Sub-second Stream</span>
-      </div>
-      <div class="chart-container">
-        <canvas id="tpsChart"></canvas>
-      </div>
-    </div>
 
-    <!-- Pet Showcase Section -->
-    <div class="card" style="margin-bottom: 24px;">
-      <div class="card-header">
-        <div class="card-title">
-          <i data-lucide="paw-print" style="color: var(--cyan-glow); width: 18px; height: 18px;"></i>
-          Equipped Pets & Inventory Overview
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Account</th>
+                <th>Status</th>
+                <th>World</th>
+                <th>Secrets</th>
+                <th>Current Taps</th>
+                <th>Live TPS</th>
+                <th>Rebirths</th>
+                <th>Eggs</th>
+                <th>Playtime</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="multiAccountsTableBody">
+              <tr><td colspan="10" class="empty-cell">Loading accounts...</td></tr>
+            </tbody>
+          </table>
         </div>
-        <span id="totalPetPower" style="font-size: 0.82rem; color: var(--text-muted); font-weight: 600;">Total Power: 0</span>
       </div>
-      <div id="petsGrid" class="pets-grid">
-        <div style="grid-column: 1/-1; color: var(--text-dim); text-align: center; padding: 20px;">
-          Waiting for telemetry...
-        </div>
-      </div>
-    </div>
+    </section>
 
-    <!-- Multi-Account Comparison Section -->
-    <div class="card" style="margin-bottom: 24px;">
-      <div class="card-header">
-        <div class="card-title">
-          <i data-lucide="users" style="color: var(--cyan-glow); width: 18px; height: 18px;"></i>
-          Multi-Account Tracking Matrix
+    <!-- ================================================================ -->
+    <!-- VIEW 5: HISTORY & DATA EXPORT / RESTORE                           -->
+    <!-- ================================================================ -->
+    <section id="view-history" class="view-panel">
+      <div class="card">
+        <div class="card-header wrap-header">
+          <div class="card-title">
+            <i data-lucide="history" style="color: var(--cyan-glow); width: 18px; height: 18px;"></i>
+            Session History &amp; Data Export
+          </div>
+          <div class="toolbar-inline">
+            <a href="/api/v1/export/csv" class="btn btn-secondary btn-sm" style="text-decoration:none;">
+              <i data-lucide="download" style="width: 14px; height: 14px;"></i> Export CSV
+            </a>
+            <a href="/api/v1/export/json" class="btn btn-secondary btn-sm" style="text-decoration:none;">
+              <i data-lucide="file-json" style="width: 14px; height: 14px;"></i> Export JSON
+            </a>
+            <label class="btn btn-secondary btn-sm" style="cursor:pointer;">
+              <i data-lucide="upload" style="width: 14px; height: 14px;"></i> Restore JSON
+              <input id="inputRestoreJson" type="file" accept=".json,application/json" style="display:none;" />
+            </label>
+          </div>
         </div>
-        <div style="display:flex; gap:8px;">
-          <button id="btnStartAll" class="btn btn-secondary" style="font-size:0.78rem; padding:6px 12px;">Track All</button>
-          <button id="btnPauseAll" class="btn btn-secondary" style="font-size:0.78rem; padding:6px 12px;">Pause All</button>
-        </div>
-      </div>
-      <div class="table-wrap">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Account</th>
-              <th>User ID</th>
-              <th>Status</th>
-              <th>Current Taps</th>
-              <th>Live TPS</th>
-              <th>Session Playtime</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="multiAccountsTableBody">
-            <tr><td colspan="7" style="text-align:center; padding: 20px;">Loading accounts...</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
 
-    <!-- Session History & Data Management Section -->
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">
-          <i data-lucide="history" style="color: var(--cyan-glow); width: 18px; height: 18px;"></i>
-          Session History & Data Export
-        </div>
-        <div style="display:flex; gap:8px;">
-          <a href="/api/v1/export/csv" class="btn btn-secondary" style="font-size:0.78rem; padding:6px 12px; text-decoration:none;">
-            <i data-lucide="download" style="width: 14px; height: 14px;"></i> Export CSV
-          </a>
-          <a href="/api/v1/export/json" class="btn btn-secondary" style="font-size:0.78rem; padding:6px 12px; text-decoration:none;">
-            <i data-lucide="file-json" style="width: 14px; height: 14px;"></i> Export JSON
-          </a>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Started At</th>
+                <th>Duration</th>
+                <th>Taps Gained</th>
+                <th>Rebirths Gained</th>
+                <th>Max TPS</th>
+                <th>Avg TPS</th>
+              </tr>
+            </thead>
+            <tbody id="historyTableBody">
+              <tr><td colspan="6" class="empty-cell">No session records.</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
-      <div class="table-wrap">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Started At</th>
-              <th>Duration</th>
-              <th>Taps Gained</th>
-              <th>Rebirths Gained</th>
-              <th>Max TPS</th>
-              <th>Avg TPS</th>
-            </tr>
-          </thead>
-          <tbody id="historyTableBody">
-            <tr><td colspan="6" style="text-align:center; padding: 20px;">No session records.</td></tr>
-          </tbody>
-        </table>
+    </section>
+
+    <!-- ================================================================ -->
+    <!-- VIEW 6: GAME CONNECTOR & LUAU SCRIPT                              -->
+    <!-- ================================================================ -->
+    <section id="view-connector" class="view-panel">
+      <div class="grid-two-col">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <i data-lucide="code-2" style="color: var(--cyan-glow); width: 18px; height: 18px;"></i>
+              In-Game Luau Telemetry Script
+            </div>
+            <span class="meta-pill">Read-Only &bull; Zero Cookies</span>
+          </div>
+
+          <p class="muted-copy">
+            Use <code>tap_sim_reborn_tracker.lua</code> to stream live Taps, Rebirths, Eggs, Worlds, Boosts, Secret Pet Inventory (with Roblox asset IDs), and Hatch popups straight to your local dashboard. Includes an <strong>AFK Closed-Inventory Guard</strong> so closing your Pet UI never wipes your Secret Vault.
+          </p>
+
+          <div class="connector-endpoint-box">
+            <div class="form-label">Telemetry Endpoint URL</div>
+            <div class="copy-field">
+              <code id="telemetryEndpointUrl">http://127.0.0.1:3883/api/v1/telemetry</code>
+              <button type="button" class="btn btn-secondary btn-sm" id="btnCopyEndpoint">Copy</button>
+            </div>
+          </div>
+
+          <div class="connector-actions">
+            <button id="btnCopyScript" class="btn btn-primary">
+              <i data-lucide="copy" style="width: 15px; height: 15px;"></i> Copy Luau Script
+            </button>
+            <a id="btnDownloadScript" href="/api/v1/connector/script.lua" download="tap_sim_reborn_tracker.lua" class="btn btn-secondary" style="text-decoration:none;">
+              <i data-lucide="download" style="width: 15px; height: 15px;"></i> Download .lua
+            </a>
+          </div>
+
+          <div class="code-preview-box">
+            <div class="code-preview-header">
+              <span>Quick Local Test Feeder (No Roblox Required)</span>
+            </div>
+            <pre><code>python tools/telemetry_feeder.py --multi 3 --rate 45 --hatch-interval 15</code></pre>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <i data-lucide="scan-search" style="color: var(--secret-glow); width: 18px; height: 18px;"></i>
+              Live In-Game Inspector Dump
+            </div>
+            <button id="btnRefreshInspector" class="btn btn-secondary btn-sm">
+              <i data-lucide="refresh-cw" style="width: 14px; height: 14px;"></i> Refresh
+            </button>
+          </div>
+          <p class="muted-copy">
+            When <code>INSPECT_ON_START = true</code> is enabled in the Luau script, it automatically posts discovered <code>leaderstats</code>, Attributes, and candidate <code>PlayerGui</code> Pet/HUD paths here so you can refine <code>CONFIG.PATHS</code> after any game update.
+          </p>
+          <div id="inspectorDumpViewer" class="inspector-viewer">
+            <div class="empty-state">No inspector dump received yet. Run the Luau script with INSPECT_ON_START = true to inspect in-game paths.</div>
+          </div>
+        </div>
       </div>
-    </div>
+    </section>
   </div>
 
   <!-- Add Account Modal -->
@@ -270,17 +655,64 @@
         <div class="form-group">
           <label class="form-label" for="inputUserId">Roblox User ID</label>
           <input id="inputUserId" class="form-input" type="number" required placeholder="e.g. 12345678" />
-          <p style="font-size: 0.75rem; color: var(--text-dim); margin-top: 6px;">
-            Username, display name, and avatar will be fetched automatically via public Roblox APIs. No password or cookie required.
+          <p class="form-hint">
+            Username, display name, and avatar are fetched automatically via public Roblox Web APIs. Zero password or cookie required.
           </p>
         </div>
-        <div style="display:flex; justify-content: flex-end; gap: 8px;">
-          <button type="button" class="btn btn-secondary" onclick="document.getElementById('addAccountModal').classList.remove('open')">Cancel</button>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" id="btnCancelAddModal">Cancel</button>
           <button type="submit" class="btn btn-primary">Add Account</button>
         </div>
       </form>
     </div>
   </div>
+
+  <!-- Secret Detail & Image Override Modal -->
+  <div id="secretDetailModal" class="modal-overlay">
+    <div class="modal-box modal-lg">
+      <div class="modal-header">
+        <div class="modal-title" id="secretModalTitle">Secret Pet Details</div>
+        <button id="btnCloseSecretModal" class="modal-close">&times;</button>
+      </div>
+      <div class="secret-modal-body">
+        <div class="secret-modal-hero">
+          <div id="secretModalAvatarFrame" class="pet-portrait-frame variant-normal lg">
+            <img id="secretModalImage" src="" alt="Secret Pet" />
+          </div>
+          <div class="secret-modal-meta">
+            <div class="secret-modal-badges" id="secretModalBadges"></div>
+            <div class="secret-modal-stats" id="secretModalStats"></div>
+          </div>
+        </div>
+
+        <div class="secret-modal-section">
+          <div class="form-label">Accounts Holding This Secret</div>
+          <div id="secretModalOwners" class="owner-table-wrap"></div>
+        </div>
+
+        <form id="formOverridePetImage" class="secret-modal-section">
+          <input type="hidden" id="overridePetSlug" />
+          <div class="form-label">Customize Secret Pet Image</div>
+          <div class="grid-two-col compact-gap">
+            <div class="form-group">
+              <label class="form-label-sm" for="inputCustomImageUrl">Direct Image URL (https:// or /static/...)</label>
+              <input id="inputCustomImageUrl" class="form-input" type="text" placeholder="https://..." />
+            </div>
+            <div class="form-group">
+              <label class="form-label-sm" for="inputCustomAssetId">Or Roblox Asset ID</label>
+              <input id="inputCustomAssetId" class="form-input" type="text" placeholder="e.g. 123456789 or rbxassetid://..." />
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" id="btnResetPetImage" class="btn btn-secondary">Reset to Default SVG</button>
+            <button type="submit" class="btn btn-primary">Save Pet Image</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div id="toastContainer" class="toast-container"></div>
 
   <script src="/static/js/app.js"></script>
 </body>
