@@ -13,7 +13,7 @@
 ===============================================================================
 ]]
 
-local SCRIPT_VERSION = "2.3.1"
+local SCRIPT_VERSION = "2.3.2"
 
 local CONFIG = {
     ENDPOINT_URL = "http://127.0.0.1:3883/api/v1/telemetry",
@@ -613,6 +613,59 @@ local function matchKnownSecret(rawText, assetId)
     return bestMatch
 end
 
+local function safeRequire(mod)
+    if not mod or not mod:IsA("ModuleScript") then
+        return nil
+    end
+    local done = false
+    local ok, res = false, nil
+    task.spawn(function()
+        ok, res = pcall(require, mod)
+        done = true
+    end)
+    local waited = 0
+    while not done and waited < 0.25 do
+        task.wait(0.02)
+        waited = waited + 0.02
+    end
+    if done and ok then
+        return res
+    end
+    return nil
+end
+
+local function getPlayerDataReplica()
+    if not ReplicatedStorage then
+        return nil
+    end
+    local controllers = ReplicatedStorage:FindFirstChild("Controllers")
+    local core = controllers and controllers:FindFirstChild("Core")
+    if not core then
+        return nil
+    end
+    local dataCtrl = safeRequire(core:FindFirstChild("DataController"))
+    if type(dataCtrl) == "table" and type(dataCtrl.GetReplica) == "function" then
+        local ok, rep = pcall(function() return dataCtrl:GetReplica() end)
+        if not ok or type(rep) ~= "table" then
+            ok, rep = pcall(function() return dataCtrl.GetReplica() end)
+        end
+        if ok and type(rep) == "table" and type(rep.Data) == "table" then
+            return rep.Data
+        end
+    end
+    local repCtrl = safeRequire(core:FindFirstChild("ReplicaController"))
+    if type(repCtrl) == "table" and type(repCtrl._replicas) == "table" then
+        for _, rep in pairs(repCtrl._replicas) do
+            if type(rep) == "table" and type(rep.Data) == "table" then
+                if rep.Class == "PlayerData" or rep.Data.Pets ~= nil or rep.Data.Rebirths ~= nil or rep.Data.Clicks ~= nil then
+                    return rep.Data
+                end
+            end
+        end
+    end
+    return nil
+end
+
 local lastCatalogScanAt = 0
 
 local function discoverGamePetCatalog()
@@ -620,6 +673,64 @@ local function discoverGamePetCatalog()
         return
     end
     lastCatalogScanAt = os.time()
+
+    -- 0. Read authoritative OriginalPetCatalog & LaunchEggConfig from ReplicatedStorage.Shared.Pets
+    if ReplicatedStorage then
+        pcall(function()
+            local shared = ReplicatedStorage:FindFirstChild("Shared")
+            local sharedPets = shared and shared:FindFirstChild("Pets")
+            if sharedPets then
+                local petToEgg = {}
+                local eggCfg = safeRequire(sharedPets:FindFirstChild("LaunchEggConfig"))
+                if type(eggCfg) == "table" then
+                    for eggName, eggData in pairs(eggCfg) do
+                        if type(eggData) == "table" and type(eggData.Secrets) == "table" then
+                            for sk, sv in pairs(eggData.Secrets) do
+                                local sName = (type(sv) == "table" and (sv.Name or sv.Pet or sv[1])) or (type(sv) == "string" and sv) or (type(sk) == "string" and sk)
+                                if type(sName) == "string" then
+                                    petToEgg[sName:lower()] = tostring(eggName)
+                                end
+                            end
+                        end
+                    end
+                end
+
+                for _, modName in ipairs({ "OriginalPetCatalog", "PetCatalog" }) do
+                    local catTbl = safeRequire(sharedPets:FindFirstChild(modName))
+                    if type(catTbl) == "table" then
+                        for petKey, def in pairs(catTbl) do
+                            if type(def) == "table" then
+                                local pName = tostring(def.Name or def.DisplayName or petKey)
+                                local rarity = tostring(def.Rarity or def.Tier or "")
+                                local rLower = rarity:lower()
+                                local imgId = extractAssetId(def.Image or def.Icon)
+                                local goldImgId = extractAssetId(def.Image_Golden)
+                                local mult = tonumber(def.Multiplier1 or def.Multiplier2 or def.Multiplier) or 1
+                                local known = KNOWN_SECRETS[pName:lower()]
+                                local isSec = (known ~= nil)
+                                    or (rLower:find("secret", 1, true) ~= nil)
+                                    or (rLower == "leaderboard")
+                                    or (rLower == "exclusive" and def.Huge == true)
+                                if isSec and not isBogusPetName(pName) then
+                                    local info = {
+                                        name = pName,
+                                        tier = (rarity ~= "" and rarity) or (known and known.tier) or "Secret",
+                                        egg = petToEgg[pName:lower()] or (known and known.egg) or "Secret Pool",
+                                        imageAssetId = imgId or (known and known.imageAssetId),
+                                        goldenAssetId = goldImgId,
+                                        multiplier = (mult and mult > 1) and mult or (known and known.multiplier) or 1,
+                                        isSecret = true,
+                                    }
+                                    registerKnownPet(pName, info)
+                                    registerKnownPet(tostring(petKey), info)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+    end
 
     -- 1. Scan ReplicatedStorage folders/models/attributes for pet definitions
     if ReplicatedStorage then
@@ -731,16 +842,170 @@ local function detectVariantFromTable(petTbl, fallbackStr)
     return detectVariant(fallbackStr or "")
 end
 
--- Strategy 1: Read player's owned Pet Inventory directly from client memory (getgc) even when Pet UI is closed!
+-- Strategy 1: Read player's owned Pet Inventory directly from TS2 DataController:GetReplica() & InventoryController:GetStacks()!
 local function collectPetsFromGc()
-    if type(getgc) ~= "function" then
-        return nil, {}, 0, 0
-    end
-    local foundInventoryTable = false
     local aggregatedSecrets = {}
     local equippedList = {}
     local invCount = 0
     local totalPower = 0
+    local foundInventoryTable = false
+
+    local function processPetRecord(rawKey, rec, equippedMap)
+        if type(rec) == "table" then
+            local rawId = rec.Name or rec.name or rec.Species or rec.species or rec.PetName or rec.petName or rec.Pet or rec.pet or rec.PetId or rec.petId or rec.ItemId or rec.Type or rec.Id or rec.id or (type(rawKey) == "string" and rawKey)
+            local rawImg = extractAssetId(rec.Image or rec.image or rec.Icon or rec.AssetId)
+            local known = matchKnownSecret(tostring(rawId or ""), rawImg)
+            local rawRarity = tostring(rec.Rarity or rec.rarity or "")
+            local isSec = (known ~= nil) or (rawRarity:lower():find("secret", 1, true) ~= nil) or (rawRarity:lower() == "leaderboard") or (rec.IsSecret == true)
+            local petName = (known and known.name) or (type(rawId) == "string" and not isBogusPetName(rawId) and rawId) or nil
+            if not petName or isBogusPetName(petName) then
+                return
+            end
+            local count = tonumber(rec.Amount or rec.amount or rec.Count or rec.count or rec.Copies or rec.Stack or 1) or 1
+            if type(rec.Ids) == "table" and #rec.Ids > count then
+                count = #rec.Ids
+            elseif type(rec.Pets) == "table" and #rec.Pets > count then
+                count = #rec.Pets
+            end
+            if count < 1 or count > 99999 then
+                count = 1
+            end
+            invCount = invCount + count
+            local variant = detectVariantFromTable(rec, tostring(rec.Tier or rec.Variant or rec.Mutation or rawId or ""))
+            local isEq = (rec.Equipped == true) or (rec.equipped == true) or (equippedMap and (equippedMap[tostring(rawKey)] or (rec.Id and equippedMap[tostring(rec.Id)]) or (rec.UUID and equippedMap[tostring(rec.UUID)]))) or false
+            local mult = parseFloatCompact(rec.Multiplier or rec.multiplier or rec.Power or (known and known.multiplier) or 1)
+            if mult <= 0 then
+                mult = 1
+            end
+            local power = parseFloatCompact(rec.Power or rec.power or (mult * 10))
+            totalPower = totalPower + (power * count)
+            local assetId = rawImg or ((variant:find("Golden", 1, true) and known and known.goldenAssetId) or (known and known.imageAssetId))
+            local tier = detectTier(rawRarity) or (known and known.tier) or (isSec and "Secret" or nil)
+
+            if isSec then
+                local aggKey = petName:lower() .. "::" .. variant:lower()
+                local existing = aggregatedSecrets[aggKey]
+                if existing then
+                    existing.count = existing.count + count
+                    existing.multiplier = math.max(existing.multiplier, mult)
+                    existing.power = math.max(existing.power, power)
+                    existing.isEquipped = existing.isEquipped or isEq
+                    existing.imageAssetId = existing.imageAssetId or assetId
+                else
+                    aggregatedSecrets[aggKey] = {
+                        id = tostring(rawKey),
+                        name = petName,
+                        rarity = "Secret",
+                        variant = variant,
+                        tier = tier,
+                        count = count,
+                        multiplier = mult,
+                        power = power,
+                        isEquipped = isEq,
+                        eggSource = known and known.egg or nil,
+                        imageAssetId = assetId,
+                    }
+                end
+            end
+
+            if isEq then
+                table.insert(equippedList, {
+                    id = tostring(rawKey),
+                    name = petName,
+                    rarity = isSec and "Secret" or "Mythic",
+                    variant = variant,
+                    tier = tier,
+                    multiplier = mult,
+                    power = power,
+                    isEquipped = true,
+                    imageAssetId = assetId,
+                })
+            end
+        elseif type(rawKey) == "string" and type(rec) == "number" and rec > 0 then
+            local known = matchKnownSecret(rawKey, nil)
+            if known then
+                invCount = invCount + rec
+                local variant = detectVariant(rawKey)
+                local aggKey = known.name:lower() .. "::" .. variant:lower()
+                aggregatedSecrets[aggKey] = {
+                    id = rawKey,
+                    name = known.name,
+                    rarity = "Secret",
+                    variant = variant,
+                    tier = known.tier or "Secret",
+                    count = rec,
+                    multiplier = known.multiplier or 1,
+                    power = (known.multiplier or 1) * 10,
+                    isEquipped = false,
+                    eggSource = known.egg,
+                    imageAssetId = known.imageAssetId,
+                }
+            end
+        end
+    end
+
+    -- 1A. Try TS2 DataController:GetReplica() first!
+    pcall(function()
+        local repData = getPlayerDataReplica()
+        if type(repData) == "table" then
+            local eqMap = {}
+            for _, eqKey in ipairs({ "EquippedPets", "Equipped", "ActivePets" }) do
+                local eqTbl = repData[eqKey]
+                if type(eqTbl) == "table" then
+                    for k, v in pairs(eqTbl) do
+                        if type(v) == "string" or type(v) == "number" then
+                            eqMap[tostring(v)] = true
+                        elseif v == true then
+                            eqMap[tostring(k)] = true
+                        end
+                    end
+                end
+            end
+            for _, petKey in ipairs({ "Pets", "OwnedPets", "Inventory", "PetInventory", "Secrets" }) do
+                local petTbl = repData[petKey]
+                if type(petTbl) == "table" then
+                    foundInventoryTable = true
+                    for k, v in pairs(petTbl) do
+                        processPetRecord(k, v, eqMap)
+                    end
+                    break
+                end
+            end
+        end
+    end)
+
+    -- 1B. Try TS2 Controllers.Pets.InventoryController:GetStacks() if Replica yielded 0 pets
+    if not foundInventoryTable or invCount == 0 then
+        pcall(function()
+            local controllers = ReplicatedStorage and ReplicatedStorage:FindFirstChild("Controllers")
+            local petsFolder = controllers and controllers:FindFirstChild("Pets")
+            local invCtrl = petsFolder and safeRequire(petsFolder:FindFirstChild("InventoryController"))
+            if type(invCtrl) == "table" and type(invCtrl.GetStacks) == "function" then
+                local ok, stacks = pcall(function() return invCtrl:GetStacks() end)
+                if not ok or type(stacks) ~= "table" then
+                    ok, stacks = pcall(function() return invCtrl.GetStacks() end)
+                end
+                if ok and type(stacks) == "table" then
+                    foundInventoryTable = true
+                    for k, v in pairs(stacks) do
+                        processPetRecord(k, v, nil)
+                    end
+                end
+            end
+        end)
+    end
+
+    if foundInventoryTable then
+        local secretList = {}
+        for _, item in pairs(aggregatedSecrets) do
+            table.insert(secretList, item)
+        end
+        return secretList, equippedList, invCount, totalPower
+    end
+
+    if type(getgc) ~= "function" then
+        return nil, {}, 0, 0
+    end
 
     pcall(function()
         local objs = getgc(true)
@@ -1425,46 +1690,40 @@ local function sendInspectorSnapshot()
         end
     end
 
-    if type(getgc) == "function" then
-        dump.replicaSummary = {}
-        pcall(function()
-            for _, t in ipairs(getgc(true)) do
-                if type(t) == "table" and type(rawget(t, "Data")) == "table" and (rawget(t, "Class") ~= nil or rawget(t, "Tags") ~= nil or rawget(t, "Id") ~= nil) then
-                    local dKeys = {}
-                    local dTbl = rawget(t, "Data")
-                    local petSample = {}
-                    for dk, dv in pairs(dTbl) do
-                        table.insert(dKeys, tostring(dk) .. ":" .. type(dv))
-                        local ldk = tostring(dk):lower()
-                        if type(dv) == "table" and (ldk:find("pet", 1, true) or ldk:find("inv", 1, true) or ldk:find("secret", 1, true) or ldk:find("item", 1, true)) then
-                            local cnt = 0
-                            for pk, pv in pairs(dv) do
-                                cnt = cnt + 1
-                                if cnt <= 5 then
-                                    if type(pv) == "table" then
-                                        local fields = {}
-                                        for fk, fv in pairs(pv) do
-                                            table.insert(fields, tostring(fk) .. "=" .. tostring(fv))
-                                        end
-                                        table.insert(petSample, tostring(dk) .. "[" .. tostring(pk) .. "]={" .. table.concat(fields, ", ") .. "}")
-                                    else
-                                        table.insert(petSample, tostring(dk) .. "[" .. tostring(pk) .. "]=" .. tostring(pv))
-                                    end
+    -- Dump actual TS2 DataController:GetReplica().Data keys & sample Pets!
+    pcall(function()
+        local repData = getPlayerDataReplica()
+        if type(repData) == "table" then
+            local rKeys = {}
+            local rSamples = {}
+            for k, v in pairs(repData) do
+                if type(v) == "table" then
+                    local cnt = 0
+                    for sk, sv in pairs(v) do
+                        cnt = cnt + 1
+                        if cnt <= 4 and (tostring(k):lower():find("pet", 1, true) or tostring(k):lower():find("secret", 1, true) or tostring(k):lower():find("inv", 1, true) or tostring(k):lower():find("index", 1, true)) then
+                            if type(sv) == "table" then
+                                local f = {}
+                                for fk, fv in pairs(sv) do
+                                    table.insert(f, tostring(fk) .. "=" .. tostring(fv))
                                 end
+                                table.insert(rSamples, tostring(k) .. "[" .. tostring(sk) .. "]={" .. table.concat(f, ", ") .. "}")
+                            else
+                                table.insert(rSamples, tostring(k) .. "[" .. tostring(sk) .. "]=" .. tostring(sv))
                             end
                         end
                     end
-                    if #dump.replicaSummary < 10 then
-                        table.insert(dump.replicaSummary, {
-                            class = tostring(rawget(t, "Class") or ""),
-                            keys = dKeys,
-                            petSample = petSample,
-                        })
-                    end
+                    table.insert(rKeys, tostring(k) .. ":table(" .. tostring(cnt) .. ")")
+                else
+                    table.insert(rKeys, tostring(k) .. "=" .. tostring(v))
                 end
             end
-        end)
-    end
+            dump.playerReplicaData = {
+                keys = rKeys,
+                samples = rSamples,
+            }
+        end
+    end)
 
     local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
     if pg then
