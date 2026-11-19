@@ -13,7 +13,7 @@
 ===============================================================================
 ]]
 
-local SCRIPT_VERSION = "2.4.2"
+local SCRIPT_VERSION = "2.4.3"
 
 local CONFIG = {
     ENDPOINT_URL = "http://127.0.0.1:3883/api/v1/telemetry",
@@ -1749,10 +1749,64 @@ local function sendInspectorSnapshot()
                 end
             end
 
-            -- Inspect constants/protos/debugState of TradingController, InventoryController, PetController
+            -- Inspect constants/protos/upvalues/debugState of TradingController, InventoryController
             dump.controllerInternals = {}
             local getConsts = (type(debug) == "table" and debug.getconstants) or getconstants
             local getProtos = (type(debug) == "table" and debug.getprotos) or getprotos
+            local getUpvals = (type(debug) == "table" and debug.getupvalues) or getupvalues
+
+            local function extractFnStrings(fnVal, depth, visitedFns)
+                depth = depth or 0
+                visitedFns = visitedFns or {}
+                if type(fnVal) ~= "function" or visitedFns[fnVal] or depth > 2 then
+                    return {}
+                end
+                visitedFns[fnVal] = true
+                local cList = {}
+                pcall(function()
+                    if type(getConsts) == "function" then
+                        for _, c in pairs(getConsts(fnVal)) do
+                            if type(c) == "string" or type(c) == "number" then
+                                table.insert(cList, tostring(c))
+                            end
+                        end
+                    end
+                    if type(getProtos) == "function" then
+                        for _, p in pairs(getProtos(fnVal)) do
+                            if type(getConsts) == "function" then
+                                for _, pc in pairs(getConsts(p)) do
+                                    if type(pc) == "string" or type(pc) == "number" then
+                                        table.insert(cList, "proto:" .. tostring(pc))
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    if type(getUpvals) == "function" and depth < 2 then
+                        for uk, uv in pairs(getUpvals(fnVal)) do
+                            if type(uv) == "function" then
+                                local sub = extractFnStrings(uv, depth + 1, visitedFns)
+                                for _, s in ipairs(sub) do
+                                    table.insert(cList, "upfn[" .. tostring(uk) .. "]:" .. s)
+                                end
+                            elseif type(uv) == "table" then
+                                for tk, tv in pairs(uv) do
+                                    if type(tv) == "function" then
+                                        local sub = extractFnStrings(tv, depth + 1, visitedFns)
+                                        for _, s in ipairs(sub) do
+                                            table.insert(cList, "uptbl[" .. tostring(tk) .. "]:" .. s)
+                                        end
+                                    else
+                                        table.insert(cList, "uptbl_k:" .. tostring(tk) .. "=" .. tostring(tv))
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end)
+                return cList
+            end
+
             local function inspectModuleFunctions(modPath)
                 local cur = ReplicatedStorage
                 for seg in modPath:gmatch("[^%.]+") do
@@ -1771,36 +1825,15 @@ local function sendInspectorSnapshot()
                         info.debugState = ds
                     end
                 end
-                if type(getConsts) == "function" then
-                    for fnName, fnVal in pairs(mod) do
-                        if type(fnVal) == "function" then
-                            local cList = {}
-                            pcall(function()
-                                for _, c in pairs(getConsts(fnVal)) do
-                                    if type(c) == "string" or type(c) == "number" then
-                                        table.insert(cList, tostring(c))
-                                    end
-                                end
-                                if type(getProtos) == "function" then
-                                    for _, p in pairs(getProtos(fnVal)) do
-                                        for _, pc in pairs(getConsts(p)) do
-                                            if type(pc) == "string" or type(pc) == "number" then
-                                                table.insert(cList, "proto:" .. tostring(pc))
-                                            end
-                                        end
-                                    end
-                                end
-                            end)
-                            info[tostring(fnName)] = cList
-                        end
+                for fnName, fnVal in pairs(mod) do
+                    if type(fnVal) == "function" then
+                        info[tostring(fnName)] = extractFnStrings(fnVal, 0, {})
                     end
                 end
                 return info
             end
             dump.controllerInternals["TradingController"] = inspectModuleFunctions("Controllers.Trading.TradingController")
-            dump.controllerInternals["InventoryController"] = inspectModuleFunctions("Controllers.Pets.InventoryController")
-            dump.controllerInternals["PetController"] = inspectModuleFunctions("Controllers.Pets.PetController")
-            dump.controllerInternals["PlayerListController"] = inspectModuleFunctions("Controllers.UI.PlayerListController")
+            dump.controllerInternals["TradeReviewController"] = inspectModuleFunctions("Controllers.Trading.TradeReviewController")
         end)
     end
 
@@ -2208,22 +2241,30 @@ local function collectOwnedSecretRecords()
     return records
 end
 
--- Auto-Unequip all Secret pets on the clone account
+-- Helper to get RemoteServices.PetService.RE.PetActionRequested
+local function getPetActionRemote()
+    if not ReplicatedStorage then return nil end
+    local rs = ReplicatedStorage:FindFirstChild("RemoteServices")
+    local petSvc = rs and rs:FindFirstChild("PetService")
+    local re = petSvc and petSvc:FindFirstChild("RE")
+    return re and re:FindFirstChild("PetActionRequested") or nil
+end
+
+-- Auto-Unequip all Secret pets on the clone account using authoritative PetService.RE.PetActionRequested
 local function unequipSecretPets(secretRecords)
     local apis = discoverTradingAndPetApis()
     local invCtrl = apis.petMods["InventoryController"]
+    local petActionRE = getPetActionRemote()
     local unequippedAny = false
 
     for _, rec in ipairs(secretRecords) do
         if rec.equipped then
             unequippedAny = true
-            invokeRemoteOrMethod(
-                apis.petMods,
-                { "Unequip", "UnequipPet", "ToggleEquip", "SetEquipped" },
-                { "UnequipPet", "Unequip", "SetPetEquipped", "EquipPet" },
-                rec.uuid,
-                false
-            )
+            if petActionRE then
+                pcall(function()
+                    petActionRE:FireServer({ Action = "Unequip", PetId = rec.uuid })
+                end)
+            end
             if type(invCtrl) == "table" then
                 pcall(function()
                     if type(invCtrl.SelectPet) == "function" then
@@ -2240,31 +2281,30 @@ local function unequipSecretPets(secretRecords)
         end
     end
 
-    if unequippedAny then
-        invokeRemoteOrMethod(
-            apis.petMods,
-            { "UnequipAll", "UnequipAllPets" },
-            { "UnequipAll", "UnequipAllPets" }
-        )
+    if unequippedAny and petActionRE then
+        pcall(function()
+            petActionRE:FireServer({ Action = "UnequipAll" })
+        end)
     end
     return unequippedAny
 end
 
--- Auto-Unlock all Secret pets on the clone account
+-- Auto-Unlock all Secret pets on the clone account using authoritative PetService.RE.PetActionRequested
 local function unlockSecretPets(secretRecords)
-    local apis = discoverTradingAndPetApis()
+    local petActionRE = getPetActionRemote()
     local unlockedAny = false
 
     for _, rec in ipairs(secretRecords) do
         if rec.locked then
             unlockedAny = true
-            invokeRemoteOrMethod(
-                apis.petMods,
-                { "Unlock", "UnlockPet", "SetLocked", "Lock", "LockPet", "ToggleLock" },
-                { "UnlockPet", "Unlock", "SetLocked", "SetPetLocked", "LockPet", "ToggleLock" },
-                rec.uuid,
-                false
-            )
+            if petActionRE then
+                pcall(function()
+                    petActionRE:FireServer({ Action = "SetLock", PetId = rec.uuid, Locked = false })
+                end)
+                pcall(function()
+                    petActionRE:FireServer({ Action = "Unlock", PetId = rec.uuid })
+                end)
+            end
         end
     end
     return unlockedAny
