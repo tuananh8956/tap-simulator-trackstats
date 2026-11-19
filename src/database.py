@@ -876,9 +876,9 @@ class Database:
                             a.get("created_at"),
                             a.get("last_seen"),
                             a.get("world"),
-                            a.get("eggs_hatched", 0),
-                            a.get("secret_count", 0),
-                            a.get("last_client_source", "telemetry"),
+                            a.get("eggs_hatched") or 0,
+                            a.get("secret_count") or 0,
+                            a.get("last_client_source") or "telemetry",
                         ),
                     )
 

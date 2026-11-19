@@ -448,20 +448,34 @@ local function collectPetsReadOnly()
             local tier = detectTier(joined) or (matchedKnown and matchedKnown.tier) or (isSecret and "Secret" or nil)
 
             local mult = 1.0
+            local multLabelIdx = nil
             local count = 1
-            for _, txt in ipairs(labels) do
-                local mMult = txt:match("^[xX]%s*([%d%.,]+[a-zA-Z]*)$")
-                if mMult then
-                    local val = parseFloatCompact(mMult)
+
+            -- Pass 1: Identify multiplier label (supports both "x25,000" and "25,000x")
+            for idx, txt in ipairs(labels) do
+                local trimmed = txt:gsub("^%s+", ""):gsub("%s+$", "")
+                local mPrefix = trimmed:match("^[xX]%s*([%d%.,]+[a-zA-Z]*)$")
+                local mSuffix = trimmed:match("^([%d%.,]+[a-zA-Z]*)%s*[xX]$")
+                local matchedStr = mSuffix or mPrefix
+                if matchedStr then
+                    local val = parseFloatCompact(matchedStr)
                     if val > mult then
                         mult = val
+                        multLabelIdx = idx
                     end
                 end
-                local mStack = txt:match("^%s*[xX](%d+)%s*$")
-                if mStack then
-                    local n = tonumber(mStack)
-                    if n and n >= 1 and n <= 9999 and mult > 1 then
-                        count = n
+            end
+
+            -- Pass 2: Read stack count ONLY from a distinct label (never the multiplier label)
+            for idx, txt in ipairs(labels) do
+                if idx ~= multLabelIdx then
+                    local mStack = txt:match("^%s*[xX](%d+)%s*$")
+                    if mStack then
+                        local n = tonumber(mStack)
+                        if n and n >= 1 and n <= 9999 then
+                            count = n
+                            break
+                        end
                     end
                 end
             end
@@ -532,8 +546,31 @@ local function collectActiveBoosts()
 end
 
 -- AFK Hatch Popup & Read-Only System Chat Listener
+local function isBannerForAnotherPlayer(rawText)
+    local lower = (rawText or ""):lower()
+    local myName = (LocalPlayer.Name or ""):lower()
+    local myDisplay = (LocalPlayer.DisplayName or ""):lower()
+    if (myName ~= "" and lower:find(myName, 1, true)) or (myDisplay ~= "" and lower:find(myDisplay, 1, true)) then
+        return false
+    end
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            local pName = (plr.Name or ""):lower()
+            local pDisp = (plr.DisplayName or ""):lower()
+            if (pName ~= "" and #pName >= 3 and lower:find(pName, 1, true))
+                or (pDisp ~= "" and #pDisp >= 3 and lower:find(pDisp, 1, true)) then
+                return true
+            end
+        end
+    end
+    return false
+end
+
 local function tryQueueHatchFromText(rawText)
     if type(rawText) ~= "string" or rawText == "" then
+        return
+    end
+    if isBannerForAnotherPlayer(rawText) then
         return
     end
     local lower = rawText:lower()

@@ -9,6 +9,7 @@ let vaultMode = "owned"; // "owned" | "catalog"
 let vaultVariantFilter = "all";
 let soundEnabled = false;
 let lastSeenHatchId = 0;
+let hatchesHydrated = false;
 
 let tpsChart = null;
 const maxChartPoints = 40;
@@ -657,11 +658,21 @@ function renderSecretVault() {
     .join("");
 }
 
-function openSecretDetailModal(slug, petKey) {
+async function openSecretDetailModal(slug, petKey) {
   const modal = document.getElementById("secretDetailModal");
   if (!modal) return;
-  const grouped = (secretsPayload.grouped || []).find((g) => g.pet_key === petKey) ||
-    (secretsPayload.grouped || []).find((g) => g.slug === slug);
+
+  let unfilteredSecrets = secretsPayload;
+  try {
+    unfilteredSecrets = await apiFetch("/api/v1/secrets");
+  } catch (_) {}
+
+  if (!petCatalogList.find((c) => c.slug === slug)) {
+    await loadPetCatalog();
+  }
+
+  const grouped = (unfilteredSecrets.grouped || []).find((g) => g.pet_key === petKey) ||
+    (unfilteredSecrets.grouped || []).find((g) => g.slug === slug);
   const catalogItem = petCatalogList.find((c) => c.slug === slug);
 
   const name = grouped?.name || catalogItem?.name || slug;
@@ -715,8 +726,9 @@ async function loadHatches() {
     const qs = rarity ? `?limit=60&rarity=${encodeURIComponent(rarity)}` : "?limit=60";
     const rows = await apiFetch(`/api/v1/hatches${qs}`);
     recentHatchesList = rows;
-    if (rows.length > 0 && lastSeenHatchId === 0) {
-      lastSeenHatchId = rows[0].id || 0;
+    if (!hatchesHydrated) {
+      lastSeenHatchId = rows.length > 0 ? (rows[0].id || 0) : 0;
+      hatchesHydrated = true;
     }
     renderHatchFeeds(rows);
   } catch (_) {}
@@ -919,10 +931,12 @@ function connectSSE() {
 
       if (!Array.isArray(payload) && Array.isArray(payload.recent_hatches)) {
         const newest = payload.recent_hatches[0];
-        if (newest && newest.id && newest.id > lastSeenHatchId) {
-          const isFirstLoad = lastSeenHatchId === 0;
+        if (!hatchesHydrated) {
+          lastSeenHatchId = newest && newest.id ? newest.id : 0;
+          hatchesHydrated = true;
+        } else if (newest && newest.id && newest.id > lastSeenHatchId) {
           lastSeenHatchId = newest.id;
-          if (!isFirstLoad && String(newest.rarity || "").toLowerCase() === "secret") {
+          if (String(newest.rarity || "").toLowerCase() === "secret") {
             showToast(`✨ SECRET HATCHED: ${newest.variant} ${newest.pet_name} (@${newest.username || "Player"})`, "secret");
             if (soundEnabled) playSecretChime();
             loadSecretsVault();

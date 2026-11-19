@@ -186,6 +186,7 @@ class SessionManager:
                             for i in range(min(delta, 5)):
                                 rec = self.db.record_hatch_event(
                                     {
+                                        "event_key": f"delta:{user_id}:{row['pet_key']}:{round(now, 3)}:{i}",
                                         "user_id": user_id,
                                         "actor_name": actor_name,
                                         "pet_name": row["name"],
@@ -641,3 +642,21 @@ class SessionManager:
             self._eggs_hatched.pop(user_id, None)
             self._client_source.pop(user_id, None)
             self.rate_engine.reset_account(user_id)
+
+    def reset_after_restore(self) -> None:
+        """Clears stale in-memory session state after a database restore to avoid orphaned FK references."""
+        with self._lock:
+            self._active_sessions.clear()
+            self._last_seen.clear()
+            self._last_payload.clear()
+            self._session_start_times.clear()
+            self._connection_state.clear()
+            self._last_authoritative_secret_sync.clear()
+            self._had_secret_sync_in_session.clear()
+            self._active_boosts.clear()
+            self._boosts_timestamp.clear()
+            self._world.clear()
+            self._eggs_hatched.clear()
+            self._client_source.clear()
+            self.rate_engine.reset_all()
+            self.db.close_dangling_sessions()

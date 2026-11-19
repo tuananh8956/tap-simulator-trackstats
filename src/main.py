@@ -449,6 +449,7 @@ async def restore_database(payload: Dict[str, Any]):
     if not success:
         raise HTTPException(status_code=400, detail="Invalid restore payload")
     pet_catalog.seed_defaults()
+    session_manager.reset_after_restore()
     return {"status": "restored"}
 
 

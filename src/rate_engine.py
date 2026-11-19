@@ -133,3 +133,8 @@ class RateEngine:
                 del self._buffers[user_id]
             if user_id in self._stats:
                 del self._stats[user_id]
+
+    def reset_all(self) -> None:
+        with self._lock:
+            self._buffers.clear()
+            self._stats.clear()
