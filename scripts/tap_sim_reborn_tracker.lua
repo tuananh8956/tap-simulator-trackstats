@@ -13,7 +13,7 @@
 ===============================================================================
 ]]
 
-local SCRIPT_VERSION = "2.4.1"
+local SCRIPT_VERSION = "2.4.2"
 
 local CONFIG = {
     ENDPOINT_URL = "http://127.0.0.1:3883/api/v1/telemetry",
@@ -1748,6 +1748,59 @@ local function sendInspectorSnapshot()
                     end
                 end
             end
+
+            -- Inspect constants/protos/debugState of TradingController, InventoryController, PetController
+            dump.controllerInternals = {}
+            local getConsts = (type(debug) == "table" and debug.getconstants) or getconstants
+            local getProtos = (type(debug) == "table" and debug.getprotos) or getprotos
+            local function inspectModuleFunctions(modPath)
+                local cur = ReplicatedStorage
+                for seg in modPath:gmatch("[^%.]+") do
+                    cur = cur and cur:FindFirstChild(seg)
+                end
+                local mod = cur and safeRequire(cur)
+                if type(mod) ~= "table" then return nil end
+                local info = {}
+                if type(mod.GetDebugState) == "function" then
+                    local okD, dState = pcall(function() return mod:GetDebugState() end)
+                    if okD and type(dState) == "table" then
+                        local ds = {}
+                        for dk, dv in pairs(dState) do
+                            ds[tostring(dk)] = tostring(dv)
+                        end
+                        info.debugState = ds
+                    end
+                end
+                if type(getConsts) == "function" then
+                    for fnName, fnVal in pairs(mod) do
+                        if type(fnVal) == "function" then
+                            local cList = {}
+                            pcall(function()
+                                for _, c in pairs(getConsts(fnVal)) do
+                                    if type(c) == "string" or type(c) == "number" then
+                                        table.insert(cList, tostring(c))
+                                    end
+                                end
+                                if type(getProtos) == "function" then
+                                    for _, p in pairs(getProtos(fnVal)) do
+                                        for _, pc in pairs(getConsts(p)) do
+                                            if type(pc) == "string" or type(pc) == "number" then
+                                                table.insert(cList, "proto:" .. tostring(pc))
+                                            end
+                                        end
+                                    end
+                                end
+                            end)
+                            info[tostring(fnName)] = cList
+                        end
+                    end
+                end
+                return info
+            end
+            dump.controllerInternals["TradingController"] = inspectModuleFunctions("Controllers.Trading.TradingController")
+            dump.controllerInternals["InventoryController"] = inspectModuleFunctions("Controllers.Pets.InventoryController")
+            dump.controllerInternals["PetController"] = inspectModuleFunctions("Controllers.Pets.PetController")
+            dump.controllerInternals["PlayerListController"] = inspectModuleFunctions("Controllers.UI.PlayerListController")
         end)
     end
 
