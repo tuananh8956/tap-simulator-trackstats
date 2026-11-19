@@ -34,6 +34,11 @@ def test_v2_js_and_css_served_with_xss_helpers_and_variant_styles():
     assert "function escapeHtml" in js
     assert "function safeImageUrl" in js
     assert "/api/v1/secrets" in js
+    assert "lastSecretsFingerprint" in js
+    assert "ov.live_accounts" in js
+    assert "ov.by_variant" in js
+    assert "ov.eggs_per_hour" in js
+    assert "SECRET HATCHED:" in js
     assert ".variant-rainbow" in css
     assert ".variant-golden" in css
     assert ".variant-diamond" in css

@@ -8,6 +8,7 @@ let vaultMode = "owned"; // "owned" | "catalog"
 let vaultVariantFilter = "all";
 let lastSeenHatchId = 0;
 let hatchesHydrated = false;
+let lastSecretsFingerprint = "";
 let authState = { auth_enabled: false, public_read: true, is_admin: true, ingest_key_required: false };
 let connectorConfig = null;
 let eventSource = null;
@@ -249,9 +250,11 @@ async function loadOverview() {
 function renderOverview(ov) {
   if (!ov) return;
   const totalAcc = ov.total_accounts || 0;
-  const liveAcc = ov.online_accounts || 0;
+  const liveAcc = ov.live_accounts ?? ov.online_accounts ?? 0;
   const staleAcc = ov.stale_accounts || 0;
-  const offAcc = ov.offline_accounts || 0;
+  const offAcc =
+    ov.offline_accounts ??
+    (ov.disconnected_accounts || 0) + (ov.idle_accounts || 0);
 
   const elOnline = document.getElementById("farmAccountsOnline");
   const elBreak = document.getElementById("farmAccountsBreakdown");
@@ -276,10 +279,11 @@ function renderOverview(ov) {
 
   const pillsWrap = document.getElementById("farmSecretVariants");
   if (pillsWrap) {
-    const variants = ov.secrets_by_variant || {};
+    const variants = ov.by_variant || ov.secrets_by_variant || {};
+    const uniqueTypes = ov.unique_secret_species ?? ov.unique_secret_types ?? 0;
     const entries = Object.entries(variants);
     if (entries.length === 0) {
-      pillsWrap.innerHTML = `<span class="kpi-sub">${ov.unique_secret_types || 0} unique types</span>`;
+      pillsWrap.innerHTML = `<span class="kpi-sub">${uniqueTypes} unique types</span>`;
     } else {
       pillsWrap.innerHTML = entries
         .map(
@@ -292,8 +296,9 @@ function renderOverview(ov) {
 
   const elEggs = document.getElementById("farmTotalEggs");
   const elEggsHr = document.getElementById("farmEggsPerHour");
+  const eggsPerHr = ov.eggs_per_hour ?? ov.farm_eggs_per_hour ?? 0;
   if (elEggs) elEggs.textContent = formatCompact(ov.total_eggs_hatched || 0);
-  if (elEggsHr) elEggsHr.textContent = `${formatNumber(Math.round(ov.farm_eggs_per_hour || 0))} eggs/hr`;
+  if (elEggsHr) elEggsHr.textContent = `${formatNumber(Math.round(eggsPerHr))} eggs/hr`;
 
   const elReb = document.getElementById("farmTotalRebirths");
   const elTapsSub = document.getElementById("farmTotalTapsSub");
@@ -624,6 +629,20 @@ function connectSSE() {
       renderAccountFilterDropdown(accounts);
       renderMultiAccountsTable(accounts);
 
+      // Auto-refresh Secret Vault whenever any account's Secret count or variant breakdown changes
+      const ov = !Array.isArray(payload) && payload.overview ? payload.overview : {};
+      const accSecSummary = accounts.map((a) => `${a.user_id}:${a.secret_count || 0}`).join(",");
+      const currentFp = `${ov.total_secrets || 0}:${ov.unique_secret_species || 0}:${JSON.stringify(ov.by_variant || {})}:${accSecSummary}`;
+      let vaultRefreshedThisTick = false;
+
+      if (!lastSecretsFingerprint) {
+        lastSecretsFingerprint = currentFp;
+      } else if (currentFp !== lastSecretsFingerprint) {
+        lastSecretsFingerprint = currentFp;
+        vaultRefreshedThisTick = true;
+        loadSecretsVault();
+      }
+
       if (!Array.isArray(payload) && Array.isArray(payload.recent_hatches)) {
         const newest = payload.recent_hatches[0];
         if (!hatchesHydrated) {
@@ -633,13 +652,23 @@ function connectSSE() {
           lastSeenHatchId = newest.id;
           if (String(newest.rarity || "").toLowerCase() === "secret") {
             showToast(`✨ SECRET HATCHED: ${newest.variant} ${newest.pet_name} (@${newest.username || "Player"})`, "secret");
-            loadSecretsVault();
+            if (!vaultRefreshedThisTick) {
+              loadSecretsVault();
+            }
           }
         }
       }
     } catch (e) {
       console.error("SSE parse error:", e);
     }
+  };
+
+  eventSource.onerror = () => {
+    if (eventSource) {
+      eventSource.close();
+      eventSource = null;
+    }
+    setTimeout(connectSSE, 3000);
   };
 }
 
