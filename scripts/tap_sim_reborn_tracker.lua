@@ -13,7 +13,7 @@
 ===============================================================================
 ]]
 
-local SCRIPT_VERSION = "2.3.2"
+local SCRIPT_VERSION = "2.3.3"
 
 local CONFIG = {
     ENDPOINT_URL = "http://127.0.0.1:3883/api/v1/telemetry",
@@ -949,8 +949,9 @@ local function collectPetsFromGc()
         local repData = getPlayerDataReplica()
         if type(repData) == "table" then
             local eqMap = {}
-            for _, eqKey in ipairs({ "EquippedPets", "Equipped", "ActivePets" }) do
-                local eqTbl = repData[eqKey]
+            local petsContainer = type(repData.Pets) == "table" and repData.Pets or repData
+            for _, eqKey in ipairs({ "EquippedPets", "Equipped", "ActivePets", "EquippedIds" }) do
+                local eqTbl = petsContainer[eqKey] or repData[eqKey]
                 if type(eqTbl) == "table" then
                     for k, v in pairs(eqTbl) do
                         if type(v) == "string" or type(v) == "number" then
@@ -961,14 +962,32 @@ local function collectPetsFromGc()
                     end
                 end
             end
-            for _, petKey in ipairs({ "Pets", "OwnedPets", "Inventory", "PetInventory", "Secrets" }) do
-                local petTbl = repData[petKey]
-                if type(petTbl) == "table" then
-                    foundInventoryTable = true
-                    for k, v in pairs(petTbl) do
-                        processPetRecord(k, v, eqMap)
+
+            local skipSubKeys = {
+                ["index"] = true,
+                ["indextiers"] = true,
+                ["indexrewards"] = true,
+                ["helddigest"] = true,
+                ["autodelete"] = true,
+                ["equipped"] = true,
+                ["equippedpets"] = true,
+                ["equippedids"] = true,
+                ["maxequipped"] = true,
+                ["maxstorage"] = true,
+            }
+
+            if type(repData.Pets) == "table" then
+                -- Check if repData.Pets is a container with sub-tables (like Held, Owned, Storage, List, Pets, Inventory)
+                for subKey, subVal in pairs(repData.Pets) do
+                    local lsk = tostring(subKey):lower()
+                    if type(subVal) == "table" and not skipSubKeys[lsk] then
+                        for pk, pv in pairs(subVal) do
+                            processPetRecord(pk, pv, eqMap)
+                        end
                     end
-                    break
+                end
+                if invCount > 0 then
+                    foundInventoryTable = true
                 end
             end
         end
@@ -986,9 +1005,11 @@ local function collectPetsFromGc()
                     ok, stacks = pcall(function() return invCtrl.GetStacks() end)
                 end
                 if ok and type(stacks) == "table" then
-                    foundInventoryTable = true
                     for k, v in pairs(stacks) do
                         processPetRecord(k, v, nil)
+                    end
+                    if invCount > 0 then
+                        foundInventoryTable = true
                     end
                 end
             end
@@ -1690,37 +1711,77 @@ local function sendInspectorSnapshot()
         end
     end
 
-    -- Dump actual TS2 DataController:GetReplica().Data keys & sample Pets!
+    -- Dump actual TS2 DataController:GetReplica().Data.Pets all 10 keys & InventoryController:GetStacks() sample!
     pcall(function()
         local repData = getPlayerDataReplica()
         if type(repData) == "table" then
-            local rKeys = {}
-            local rSamples = {}
-            for k, v in pairs(repData) do
-                if type(v) == "table" then
-                    local cnt = 0
-                    for sk, sv in pairs(v) do
-                        cnt = cnt + 1
-                        if cnt <= 4 and (tostring(k):lower():find("pet", 1, true) or tostring(k):lower():find("secret", 1, true) or tostring(k):lower():find("inv", 1, true) or tostring(k):lower():find("index", 1, true)) then
-                            if type(sv) == "table" then
-                                local f = {}
-                                for fk, fv in pairs(sv) do
-                                    table.insert(f, tostring(fk) .. "=" .. tostring(fv))
+            local petsSubInfo = {}
+            if type(repData.Pets) == "table" then
+                for pk, pv in pairs(repData.Pets) do
+                    local kStr = tostring(pk)
+                    if kStr ~= "Index" and kStr ~= "IndexTiers" and kStr ~= "IndexRewards" then
+                        if type(pv) == "table" then
+                            local entries = {}
+                            local cnt = 0
+                            for ek, ev in pairs(pv) do
+                                cnt = cnt + 1
+                                if cnt <= 12 then
+                                    if type(ev) == "table" then
+                                        local f = {}
+                                        for fk, fv in pairs(ev) do
+                                            table.insert(f, tostring(fk) .. "=" .. tostring(fv))
+                                        end
+                                        table.insert(entries, tostring(ek) .. ":{" .. table.concat(f, ", ") .. "}")
+                                    else
+                                        table.insert(entries, tostring(ek) .. "=" .. tostring(ev))
+                                    end
                                 end
-                                table.insert(rSamples, tostring(k) .. "[" .. tostring(sk) .. "]={" .. table.concat(f, ", ") .. "}")
-                            else
-                                table.insert(rSamples, tostring(k) .. "[" .. tostring(sk) .. "]=" .. tostring(sv))
+                            end
+                            petsSubInfo[kStr] = { count = cnt, samples = entries }
+                        else
+                            petsSubInfo[kStr] = tostring(pv)
+                        end
+                    else
+                        petsSubInfo[kStr] = "skipped_index"
+                    end
+                end
+            end
+
+            local stacksSample = {}
+            pcall(function()
+                local controllers = ReplicatedStorage and ReplicatedStorage:FindFirstChild("Controllers")
+                local petsFolder = controllers and controllers:FindFirstChild("Pets")
+                local invCtrl = petsFolder and safeRequire(petsFolder:FindFirstChild("InventoryController"))
+                if type(invCtrl) == "table" and type(invCtrl.GetStacks) == "function" then
+                    local ok, stacks = pcall(function() return invCtrl:GetStacks() end)
+                    if not ok or type(stacks) ~= "table" then
+                        ok, stacks = pcall(function() return invCtrl.GetStacks() end)
+                    end
+                    if ok and type(stacks) == "table" then
+                        local sc = 0
+                        for sk, sv in pairs(stacks) do
+                            sc = sc + 1
+                            if sc <= 10 then
+                                if type(sv) == "table" then
+                                    local f = {}
+                                    for fk, fv in pairs(sv) do
+                                        table.insert(f, tostring(fk) .. "=" .. tostring(fv))
+                                    end
+                                    table.insert(stacksSample, tostring(sk) .. ":{" .. table.concat(f, ", ") .. "}")
+                                else
+                                    table.insert(stacksSample, tostring(sk) .. "=" .. tostring(sv))
+                                end
                             end
                         end
                     end
-                    table.insert(rKeys, tostring(k) .. ":table(" .. tostring(cnt) .. ")")
-                else
-                    table.insert(rKeys, tostring(k) .. "=" .. tostring(v))
                 end
-            end
+            end)
+
             dump.playerReplicaData = {
-                keys = rKeys,
-                samples = rSamples,
+                petsTable = petsSubInfo,
+                currencies = repData.Currencies,
+                statistics = repData.Statistics,
+                inventoryStacks = stacksSample,
             }
         end
     end)
