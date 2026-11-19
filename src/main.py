@@ -26,6 +26,7 @@ from src.config import settings, BASE_DIR
 from src.models import (
     TelemetryPayload,
     AlertSettingsUpdate,
+    AutoTradeSettingsUpdate,
     CatalogImageOverrideRequest,
     InspectorReportInput,
     slugify_pet_name,
@@ -257,7 +258,8 @@ async def ingest_telemetry(payload: TelemetryPayload, request: Request):
         "tps": result.get("tps", 0.0),
         "secret_count": result.get("secret_count", 0),
         "new_hatches_count": len(result.get("new_hatches", [])),
-        "script_version": "2.3.4",
+        "script_version": "2.4.0",
+        "trade_directive": result.get("trade_directive"),
     }
 
 
@@ -430,6 +432,34 @@ async def list_inspector_reports(limit: int = 10):
     return db.get_inspector_reports(limit=limit)
 
 
+# --- Auto-Trade Secret Consolidation endpoints (v2.4) ---
+
+
+@app.get("/api/v1/trade/status", dependencies=[Depends(require_read_access)])
+async def get_auto_trade_status():
+    return session_manager.get_trade_status()
+
+
+@app.post("/api/v1/trade/settings", dependencies=[Depends(require_admin)])
+async def update_auto_trade_settings(req: AutoTradeSettingsUpdate):
+    return session_manager.update_trade_settings(req)
+
+
+@app.post("/api/v1/trade/queue/{user_id}", dependencies=[Depends(require_admin)])
+async def queue_account_for_trade(user_id: int):
+    return session_manager.enqueue_clone_for_trade(user_id)
+
+
+@app.post("/api/v1/trade/queue-all", dependencies=[Depends(require_admin)])
+async def queue_all_accounts_for_trade():
+    return session_manager.enqueue_all_clones_for_trade()
+
+
+@app.post("/api/v1/trade/skip", dependencies=[Depends(require_admin)])
+async def skip_active_trade_clone():
+    return session_manager.skip_active_trade_clone()
+
+
 # --- Accounts endpoints (v1 preserved + v2 fields) ---
 
 
@@ -456,6 +486,10 @@ async def list_accounts():
                 "client_source": live["client_source"],
                 "secret_pets": live["secret_pets"],
                 "top_secrets": live["secret_pets"][:3],
+                "place_id": live.get("place_id"),
+                "job_id": live.get("job_id"),
+                "trade_state": live.get("trade_state", "IDLE"),
+                "trade_message": live.get("trade_message"),
             }
         )
     return result
@@ -572,6 +606,7 @@ async def sse_stream(request: Request):
                 "overview": overview,
                 "accounts": accounts_payload,
                 "recent_hatches": recent_hatches,
+                "trade_status": session_manager.get_trade_status(),
             }
             yield f"data: {json.dumps(envelope)}\n\n"
             await asyncio.sleep(1.0)

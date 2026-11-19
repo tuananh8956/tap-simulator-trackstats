@@ -4,7 +4,13 @@ from typing import Dict, Any, Optional, List, Tuple
 from src.database import Database
 from src.rate_engine import RateEngine
 from src.pet_catalog import PetCatalogService
-from src.models import TelemetryPayload, is_bogus_secret_name, slugify_pet_name, normalize_variant
+from src.models import (
+    TelemetryPayload,
+    AutoTradeSettingsUpdate,
+    is_bogus_secret_name,
+    slugify_pet_name,
+    normalize_variant,
+)
 
 
 class SessionManager:
@@ -38,8 +44,332 @@ class SessionManager:
         self._eggs_hatched: Dict[int, int] = {}
         self._client_source: Dict[int, str] = {}
 
+        # v2.4 Auto-Trade Coordinator state
+        self._place_id: Dict[int, Optional[int]] = {}
+        self._job_id: Dict[int, Optional[str]] = {}
+        self._trade_state: Dict[int, str] = {}
+        self._trade_message: Dict[int, Optional[str]] = {}
+        self._secret_instance_ids: Dict[int, List[str]] = {}
+        self._priority_trade_queue: List[int] = []
+        self._active_trade_clone: Optional[int] = None
+        self._active_trade_leased_at: float = 0.0
+        self._trade_cooldown_until: Dict[int, float] = {}
+        self._recent_trade_completions: List[Dict[str, Any]] = []
+
         # Clean any dangling sessions from a prior crash/restart
         self.db.close_dangling_sessions()
+
+    def _resolve_main_account_locked(self) -> Dict[str, Any]:
+        cfg = self.db.get_auto_trade_settings()
+        accounts = self.db.get_accounts()
+        acc_by_id = {int(a["user_id"]): a for a in accounts}
+        acc_by_name = {(a.get("username") or "").strip().lower(): a for a in accounts if a.get("username")}
+
+        main_uid = cfg.get("mainUserId")
+        main_uname = (cfg.get("mainUsername") or "").strip()
+        dirty = False
+
+        if main_uname:
+            matched = acc_by_name.get(main_uname.lower())
+            if matched and (main_uid is None or int(matched["user_id"]) != int(main_uid)):
+                main_uid = int(matched["user_id"])
+                main_uname = matched.get("username") or main_uname
+                dirty = True
+
+        if main_uid is not None and int(main_uid) in acc_by_id and not main_uname:
+            main_uname = acc_by_id[int(main_uid)].get("username") or ""
+            if main_uname:
+                dirty = True
+
+        if dirty:
+            cfg = self.db.save_auto_trade_settings(
+                {
+                    **cfg,
+                    "mainUserId": main_uid,
+                    "mainUsername": main_uname,
+                }
+            )
+        return cfg
+
+    def _reconcile_trade_queue_locked(self, now: Optional[float] = None) -> Dict[str, Any]:
+        current_time = now if now is not None else time.time()
+        cfg = self._resolve_main_account_locked()
+        main_uid = cfg.get("mainUserId")
+        main_uname = (cfg.get("mainUsername") or "").strip()
+
+        accounts = self.db.get_accounts()
+        acc_by_id = {int(a["user_id"]): a for a in accounts}
+        trusted_user_ids = sorted(acc_by_id.keys())
+
+        secret_counts: Dict[int, int] = {}
+        for uid, acc in acc_by_id.items():
+            secret_counts[uid] = int(acc.get("secret_count") or 0)
+
+        main_online = bool(main_uid is not None and self._connection_state.get(int(main_uid)) == "LIVE")
+        main_job_id = (self._job_id.get(int(main_uid)) or "").strip() if main_uid is not None else ""
+        main_place_id = (
+            int(self._place_id.get(int(main_uid)) or 72858262610964)
+            if main_uid is not None
+            else 72858262610964
+        )
+        main_ready = bool(main_online and main_job_id)
+
+        # Clean priority queue of invalid or completed accounts
+        self._priority_trade_queue = [
+            uid
+            for uid in self._priority_trade_queue
+            if uid in acc_by_id
+            and (main_uid is None or uid != int(main_uid))
+            and secret_counts.get(uid, 0) > 0
+            and self._connection_state.get(uid) == "LIVE"
+        ]
+
+        # Check active clone lease
+        active = self._active_trade_clone
+        lease_timeout = float(cfg.get("leaseTimeoutSec") or 120)
+        if active is not None:
+            active_state = (self._trade_state.get(active) or "IDLE").upper()
+            active_secrets = secret_counts.get(active, 0)
+            active_conn = self._connection_state.get(active, "IDLE")
+
+            if (main_uid is not None and active == int(main_uid)) or active_conn != "LIVE":
+                self._active_trade_clone = None
+            elif active_secrets <= 0 or (active_state == "COMPLETED" and active_secrets <= 0):
+                self._recent_trade_completions.insert(
+                    0,
+                    {
+                        "user_id": active,
+                        "username": acc_by_id.get(active, {}).get("username") or f"Player_{active}",
+                        "completed_at": current_time,
+                    },
+                )
+                del self._recent_trade_completions[20:]
+                if active in self._priority_trade_queue:
+                    self._priority_trade_queue.remove(active)
+                self._trade_cooldown_until[active] = current_time + 15.0
+                self._active_trade_clone = None
+            elif active_state == "ERROR":
+                if active in self._priority_trade_queue:
+                    self._priority_trade_queue.remove(active)
+                self._trade_cooldown_until[active] = current_time + 15.0
+                self._active_trade_clone = None
+            elif (current_time - self._active_trade_leased_at) >= lease_timeout:
+                if active in self._priority_trade_queue:
+                    self._priority_trade_queue.remove(active)
+                self._trade_cooldown_until[active] = current_time + 15.0
+                self._active_trade_clone = None
+
+        # Build ordered candidate queue (priority queue first, then automatic queue if enabled)
+        ordered_queue: List[int] = []
+        seen_q = set()
+
+        for uid in self._priority_trade_queue:
+            if (
+                uid not in seen_q
+                and (main_uid is None or uid != int(main_uid))
+                and self._connection_state.get(uid) == "LIVE"
+                and secret_counts.get(uid, 0) > 0
+                and current_time >= self._trade_cooldown_until.get(uid, 0.0)
+            ):
+                ordered_queue.append(uid)
+                seen_q.add(uid)
+
+        if cfg.get("enabled"):
+            auto_candidates = [
+                uid
+                for uid in acc_by_id
+                if uid not in seen_q
+                and (main_uid is None or uid != int(main_uid))
+                and self._connection_state.get(uid) == "LIVE"
+                and secret_counts.get(uid, 0) > 0
+                and current_time >= self._trade_cooldown_until.get(uid, 0.0)
+            ]
+            auto_candidates.sort(key=lambda u: (-secret_counts.get(u, 0), u))
+            for uid in auto_candidates:
+                ordered_queue.append(uid)
+                seen_q.add(uid)
+
+            if not ordered_queue:
+                cooldown_candidates = [
+                    uid
+                    for uid in acc_by_id
+                    if (main_uid is None or uid != int(main_uid))
+                    and self._connection_state.get(uid) == "LIVE"
+                    and secret_counts.get(uid, 0) > 0
+                ]
+                cooldown_candidates.sort(
+                    key=lambda u: (self._trade_cooldown_until.get(u, 0.0), -secret_counts.get(u, 0), u)
+                )
+                ordered_queue.extend(cooldown_candidates)
+
+        if main_ready:
+            if self._active_trade_clone is None and ordered_queue:
+                self._active_trade_clone = ordered_queue[0]
+                self._active_trade_leased_at = current_time
+            elif self._active_trade_clone is not None and self._active_trade_clone not in ordered_queue:
+                self._active_trade_clone = ordered_queue[0] if ordered_queue else None
+                if self._active_trade_clone is not None:
+                    self._active_trade_leased_at = current_time
+        else:
+            self._active_trade_clone = None
+
+        active_uid = self._active_trade_clone
+        active_acc = acc_by_id.get(active_uid) if active_uid is not None else None
+
+        queue_items = []
+        for idx, uid in enumerate(ordered_queue):
+            a = acc_by_id.get(uid, {})
+            queue_items.append(
+                {
+                    "position": idx + 1,
+                    "user_id": uid,
+                    "username": a.get("username") or f"Player_{uid}",
+                    "secret_count": secret_counts.get(uid, 0),
+                    "is_active": uid == active_uid,
+                    "trade_state": self._trade_state.get(uid, "QUEUED" if uid != active_uid else "ACTIVE"),
+                    "trade_message": self._trade_message.get(uid),
+                    "job_id": self._job_id.get(uid),
+                }
+            )
+
+        return {
+            "settings": cfg,
+            "main_user_id": main_uid,
+            "main_username": main_uname,
+            "main_online": main_online,
+            "main_ready": main_ready,
+            "main_place_id": main_place_id,
+            "main_job_id": main_job_id or None,
+            "active_clone_id": active_uid,
+            "active_clone_username": (active_acc.get("username") if active_acc else None),
+            "active_clone_secrets": (secret_counts.get(active_uid, 0) if active_uid is not None else 0),
+            "active_clone_state": (self._trade_state.get(active_uid, "IDLE") if active_uid is not None else None),
+            "active_lease_elapsed_sec": (
+                round(max(0.0, current_time - self._active_trade_leased_at), 1) if active_uid is not None else 0.0
+            ),
+            "queue_count": len(queue_items),
+            "total_pending_secrets": sum(item["secret_count"] for item in queue_items),
+            "queue": queue_items,
+            "trusted_user_ids": trusted_user_ids,
+            "recent_completions": list(self._recent_trade_completions),
+        }
+
+    def _build_trade_directive_locked(self, user_id: int, status: Dict[str, Any]) -> Dict[str, Any]:
+        cfg = status["settings"]
+        main_uid = status["main_user_id"]
+        active_uid = status["active_clone_id"]
+        queue_ids = [item["user_id"] for item in status["queue"]]
+        is_enabled_or_queued = bool(cfg.get("enabled") or user_id in queue_ids or user_id == active_uid)
+
+        if main_uid is not None and int(user_id) == int(main_uid):
+            return {
+                "enabled": bool(cfg.get("enabled") or active_uid is not None or len(queue_ids) > 0),
+                "role": "MAIN",
+                "action": "AUTO_ACCEPT",
+                "mainUserId": main_uid,
+                "mainUsername": status["main_username"],
+                "activeCloneUserId": active_uid,
+                "activeCloneUsername": status["active_clone_username"],
+                "trustedUserIds": status["trusted_user_ids"],
+            }
+
+        if active_uid is not None and int(user_id) == int(active_uid) and status["main_ready"]:
+            return {
+                "enabled": True,
+                "role": "CLONE_ACTIVE",
+                "action": "JOIN_AND_TRADE",
+                "mainUserId": main_uid,
+                "mainUsername": status["main_username"],
+                "mainPlaceId": status["main_place_id"],
+                "mainJobId": status["main_job_id"],
+                "unequipSecrets": bool(cfg.get("unequipSecrets", True)),
+                "unlockSecrets": bool(cfg.get("unlockSecrets", True)),
+                "hopOutAfterTrade": bool(cfg.get("hopOutAfterTrade", True)),
+            }
+
+        if is_enabled_or_queued and user_id in queue_ids:
+            pos = queue_ids.index(user_id) + 1
+            return {
+                "enabled": True,
+                "role": "CLONE_QUEUED",
+                "action": "WAIT",
+                "queuePosition": pos,
+                "mainUserId": main_uid,
+                "mainUsername": status["main_username"],
+                "mainReady": status["main_ready"],
+            }
+
+        return {
+            "enabled": bool(cfg.get("enabled")),
+            "role": "IDLE",
+            "action": "NONE",
+            "mainUserId": main_uid,
+            "mainUsername": status["main_username"],
+        }
+
+    def get_trade_status(self, now: Optional[float] = None) -> Dict[str, Any]:
+        with self._lock:
+            return self._reconcile_trade_queue_locked(now=now)
+
+    def update_trade_settings(self, req: AutoTradeSettingsUpdate, now: Optional[float] = None) -> Dict[str, Any]:
+        with self._lock:
+            current = self.db.get_auto_trade_settings()
+            patch = req.model_dump(exclude_unset=True)
+            if "mainUsername" in patch and patch["mainUsername"] is not None:
+                patch["mainUsername"] = str(patch["mainUsername"]).strip()
+                # If username changed and mainUserId wasn't explicitly set in the request, reset mainUserId so it resolves cleanly
+                if "mainUserId" not in patch and patch["mainUsername"].lower() != (current.get("mainUsername") or "").lower():
+                    patch["mainUserId"] = None
+            self.db.save_auto_trade_settings({**current, **patch})
+            return self._reconcile_trade_queue_locked(now=now)
+
+    def enqueue_clone_for_trade(self, user_id: int, now: Optional[float] = None) -> Dict[str, Any]:
+        current_time = now if now is not None else time.time()
+        with self._lock:
+            self._trade_cooldown_until.pop(user_id, None)
+            if user_id in self._priority_trade_queue:
+                self._priority_trade_queue.remove(user_id)
+            self._priority_trade_queue.insert(0, user_id)
+            self._trade_state[user_id] = "QUEUED"
+            # Preempt non-priority active clone if this user was explicitly manually queued
+            if self._active_trade_clone is not None and self._active_trade_clone != user_id:
+                if self._active_trade_clone not in self._priority_trade_queue:
+                    self._active_trade_clone = None
+            return self._reconcile_trade_queue_locked(now=current_time)
+
+    def enqueue_all_clones_for_trade(self, now: Optional[float] = None) -> Dict[str, Any]:
+        current_time = now if now is not None else time.time()
+        with self._lock:
+            self._trade_cooldown_until.clear()
+            cfg = self._resolve_main_account_locked()
+            main_uid = cfg.get("mainUserId")
+            accounts = self.db.get_accounts()
+            eligible = [
+                int(a["user_id"])
+                for a in accounts
+                if (main_uid is None or int(a["user_id"]) != int(main_uid))
+                and int(a.get("secret_count") or 0) > 0
+                and self._connection_state.get(int(a["user_id"])) == "LIVE"
+            ]
+            eligible.sort(
+                key=lambda u: (
+                    -int(next((a.get("secret_count") or 0 for a in accounts if int(a["user_id"]) == u), 0)),
+                    u,
+                )
+            )
+            self._priority_trade_queue = eligible
+            return self._reconcile_trade_queue_locked(now=current_time)
+
+    def skip_active_trade_clone(self, now: Optional[float] = None) -> Dict[str, Any]:
+        current_time = now if now is not None else time.time()
+        with self._lock:
+            active = self._active_trade_clone
+            if active is not None:
+                if active in self._priority_trade_queue:
+                    self._priority_trade_queue.remove(active)
+                self._trade_cooldown_until[active] = current_time + 20.0
+                self._active_trade_clone = None
+            return self._reconcile_trade_queue_locked(now=current_time)
 
     def _collect_pending_asset(
         self,
@@ -257,6 +587,20 @@ class SessionManager:
             self._last_payload[user_id] = payload
             self._connection_state[user_id] = "LIVE"
 
+            if payload.placeId is not None:
+                self._place_id[user_id] = payload.placeId
+            if payload.jobId is not None:
+                self._job_id[user_id] = payload.jobId.strip()
+            if payload.tradeState is not None:
+                self._trade_state[user_id] = payload.tradeState.strip().upper()
+            if payload.tradeMessage is not None:
+                self._trade_message[user_id] = payload.tradeMessage.strip()
+            if payload.secretInstanceIds is not None:
+                self._secret_instance_ids[user_id] = list(payload.secretInstanceIds)
+
+            trade_status = self._reconcile_trade_queue_locked(now=now)
+            trade_directive = self._build_trade_directive_locked(user_id, trade_status)
+
             needs_profile = (acc.get("username") == f"Player_{user_id}") or (not acc.get("avatar_url"))
 
             return {
@@ -268,6 +612,7 @@ class SessionManager:
                 "new_hatches": new_hatches,
                 "pending_asset_ids": pending_asset_ids,
                 "needs_profile_lookup": needs_profile,
+                "trade_directive": trade_directive,
             }
 
     def check_timeouts(self, now: Optional[float] = None) -> List[Dict[str, Any]]:
@@ -460,6 +805,10 @@ class SessionManager:
                 "world": world,
                 "active_boosts": self._get_adjusted_boosts(user_id, current_time),
                 "client_source": client_source,
+                "place_id": self._place_id.get(user_id),
+                "job_id": self._job_id.get(user_id),
+                "trade_state": self._trade_state.get(user_id, "IDLE"),
+                "trade_message": self._trade_message.get(user_id),
             }
 
     def get_overview(self, now: Optional[float] = None) -> Dict[str, Any]:
@@ -651,6 +1000,15 @@ class SessionManager:
             self._world.pop(user_id, None)
             self._eggs_hatched.pop(user_id, None)
             self._client_source.pop(user_id, None)
+            self._place_id.pop(user_id, None)
+            self._job_id.pop(user_id, None)
+            self._trade_state.pop(user_id, None)
+            self._trade_message.pop(user_id, None)
+            self._secret_instance_ids.pop(user_id, None)
+            if user_id in self._priority_trade_queue:
+                self._priority_trade_queue.remove(user_id)
+            if self._active_trade_clone == user_id:
+                self._active_trade_clone = None
             self.rate_engine.reset_account(user_id)
 
     def reset_after_restore(self) -> None:
@@ -668,5 +1026,15 @@ class SessionManager:
             self._world.clear()
             self._eggs_hatched.clear()
             self._client_source.clear()
+            self._place_id.clear()
+            self._job_id.clear()
+            self._trade_state.clear()
+            self._trade_message.clear()
+            self._secret_instance_ids.clear()
+            self._priority_trade_queue.clear()
+            self._active_trade_clone = None
+            self._active_trade_leased_at = 0.0
+            self._trade_cooldown_until.clear()
+            self._recent_trade_completions.clear()
             self.rate_engine.reset_all()
             self.db.close_dangling_sessions()
