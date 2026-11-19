@@ -13,7 +13,7 @@
 ===============================================================================
 ]]
 
-local SCRIPT_VERSION = "2.3.3"
+local SCRIPT_VERSION = "2.3.4"
 
 local CONFIG = {
     ENDPOINT_URL = "http://127.0.0.1:3883/api/v1/telemetry",
@@ -871,8 +871,9 @@ local function collectPetsFromGc()
                 count = 1
             end
             invCount = invCount + count
-            local variant = detectVariantFromTable(rec, tostring(rec.Tier or rec.Variant or rec.Mutation or rawId or ""))
-            local isEq = (rec.Equipped == true) or (rec.equipped == true) or (equippedMap and (equippedMap[tostring(rawKey)] or (rec.Id and equippedMap[tostring(rec.Id)]) or (rec.UUID and equippedMap[tostring(rec.UUID)]))) or false
+            local combinedVariantStr = tostring(rec.Tier or "") .. " " .. tostring(rec.Mutation or "") .. " " .. tostring(rec.Variant or "")
+            local variant = detectVariantFromTable(rec, combinedVariantStr)
+            local isEq = (rec.Equip == true) or (rec.Equipped == true) or (rec.equipped == true) or (equippedMap and (equippedMap[tostring(rawKey)] or (rec.Id and equippedMap[tostring(rec.Id)]) or (rec.UUID and equippedMap[tostring(rec.UUID)]))) or false
             local mult = parseFloatCompact(rec.Multiplier or rec.multiplier or rec.Power or (known and known.multiplier) or 1)
             if mult <= 0 then
                 mult = 1
@@ -881,6 +882,7 @@ local function collectPetsFromGc()
             totalPower = totalPower + (power * count)
             local assetId = rawImg or ((variant:find("Golden", 1, true) and known and known.goldenAssetId) or (known and known.imageAssetId))
             local tier = detectTier(rawRarity) or (known and known.tier) or (isSec and "Secret" or nil)
+            local sourceEgg = (type(rec.SourceEgg) == "string" and rec.SourceEgg ~= "" and rec.SourceEgg) or (known and known.egg) or nil
 
             if isSec then
                 local aggKey = petName:lower() .. "::" .. variant:lower()
@@ -891,6 +893,7 @@ local function collectPetsFromGc()
                     existing.power = math.max(existing.power, power)
                     existing.isEquipped = existing.isEquipped or isEq
                     existing.imageAssetId = existing.imageAssetId or assetId
+                    existing.eggSource = existing.eggSource or sourceEgg
                 else
                     aggregatedSecrets[aggKey] = {
                         id = tostring(rawKey),
@@ -902,7 +905,7 @@ local function collectPetsFromGc()
                         multiplier = mult,
                         power = power,
                         isEquipped = isEq,
-                        eggSource = known and known.egg or nil,
+                        eggSource = sourceEgg,
                         imageAssetId = assetId,
                     }
                 end
