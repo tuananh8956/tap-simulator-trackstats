@@ -810,7 +810,7 @@ select.account-select:focus,
 }
 
 .secret-info { min-width: 0; flex: 1; }
-.secret-badges-row { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 5px; }
+.secret-badges-row { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 5px; padding-right: 48px; }
 .tier-badge, .variant-badge {
   font-size: 0.66rem;
   font-weight: 800;
