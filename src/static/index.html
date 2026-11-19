@@ -47,6 +47,11 @@
           <i data-lucide="volume-2" style="width: 16px; height: 16px;"></i>
         </button>
 
+        <button id="btnAdminAuth" class="btn btn-secondary" title="Unlock Admin Controls &amp; Executor Key">
+          <i data-lucide="lock" style="width: 15px; height: 15px;"></i>
+          <span id="adminAuthText">Admin</span>
+        </button>
+
         <div id="connectionStatusBadge" class="status-badge idle">
           <span class="status-dot"></span>
           <span id="statusText">IDLE</span>
@@ -597,10 +602,41 @@
           </div>
 
           <p class="muted-copy">
-            Use <code>tap_sim_reborn_tracker.lua</code> to stream live Taps, Rebirths, Eggs, Worlds, Boosts, Secret Pet Inventory (with Roblox asset IDs), and Hatch popups straight to your local dashboard. Includes an <strong>AFK Closed-Inventory Guard</strong> so closing your Pet UI never wipes your Secret Vault.
+            Paste the 1-line command below into your Roblox executor (or save it inside your executor's <code>autoexec</code> folder) to stream live Taps, Rebirths, Eggs, Worlds, Boosts, Secret Pet Inventory, and Secret Hatch popups straight to this web dashboard. Includes an <strong>AFK Closed-Inventory Guard</strong> so closing your Pet UI never wipes your Secret Vault.
           </p>
 
-          <div class="connector-endpoint-box">
+          <div id="connectorKeyNotice" class="connector-key-banner">
+            <span id="connectorKeyNoticeText">Ready to copy executor loader command.</span>
+            <button type="button" id="btnUnlockFromConnector" class="btn btn-secondary btn-sm" style="display:none;">Unlock Admin to Reveal Key</button>
+          </div>
+
+          <div class="code-preview-box loader-code-box">
+            <div class="code-preview-header">
+              <span>1. Paste into Executor / Autoexec (Recommended)</span>
+              <button type="button" class="btn btn-primary btn-sm" id="btnCopyLoaderSnippet">
+                <i data-lucide="copy" style="width: 14px; height: 14px;"></i> Copy Executor Script
+              </button>
+            </div>
+            <pre><code id="executorLoaderSnippet">getgenv().TrackStats = {
+    Key = "YOUR_TRACKSTATS_KEY",
+    Interval = 2,
+}
+loadstring(game:HttpGet("http://127.0.0.1:3883/loader.lua"))()</code></pre>
+          </div>
+
+          <div class="code-preview-box" style="margin-top: 12px;">
+            <div class="code-preview-header">
+              <span>2. Fallback Executor Command (If game:HttpGet is disabled)</span>
+              <button type="button" class="btn btn-secondary btn-sm" id="btnCopyFallbackSnippet">
+                <i data-lucide="copy" style="width: 14px; height: 14px;"></i> Copy Fallback
+              </button>
+            </div>
+            <pre><code id="executorFallbackSnippet">getgenv().TrackStats = { Key = "YOUR_TRACKSTATS_KEY", Interval = 2 }
+local req = request or http_request or (syn and syn.request)
+loadstring(req({ Url = "http://127.0.0.1:3883/loader.lua", Method = "GET" }).Body)()</code></pre>
+          </div>
+
+          <div class="connector-endpoint-box" style="margin-top: 12px;">
             <div class="form-label">Telemetry Endpoint URL</div>
             <div class="copy-field">
               <code id="telemetryEndpointUrl">http://127.0.0.1:3883/api/v1/telemetry</code>
@@ -609,8 +645,8 @@
           </div>
 
           <div class="connector-actions">
-            <button id="btnCopyScript" class="btn btn-primary">
-              <i data-lucide="copy" style="width: 15px; height: 15px;"></i> Copy Luau Script
+            <button id="btnCopyScript" class="btn btn-secondary">
+              <i data-lucide="file-code" style="width: 15px; height: 15px;"></i> Copy Full Raw .lua
             </button>
             <a id="btnDownloadScript" href="/api/v1/connector/script.lua" download="tap_sim_reborn_tracker.lua" class="btn btn-secondary" style="text-decoration:none;">
               <i data-lucide="download" style="width: 15px; height: 15px;"></i> Download .lua
@@ -711,6 +747,30 @@
           </div>
         </form>
       </div>
+    </div>
+  </div>
+
+  <!-- Admin Unlock Modal -->
+  <div id="adminAuthModal" class="modal-overlay">
+    <div class="modal-box">
+      <div class="modal-header">
+        <div class="modal-title">Admin Access &amp; Executor Key</div>
+        <button id="btnCloseAdminModal" class="modal-close">&times;</button>
+      </div>
+      <form id="formAdminAuth">
+        <div class="form-group">
+          <label class="form-label" for="inputAdminPassword">Admin Password</label>
+          <input id="inputAdminPassword" class="form-input" type="password" placeholder="Enter TRACKSTATS_ADMIN_PASSWORD" />
+          <p class="form-hint">
+            Public visitors can view live stats &amp; the Secret Vault in read-only mode. Unlock Admin to reveal your live Executor Ingest Key, manage accounts, or configure Discord Webhooks.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-danger-ghost" id="btnAdminLogout" style="display:none;">Lock Admin</button>
+          <button type="button" class="btn btn-secondary" id="btnCancelAdminModal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="btnSubmitAdminLogin">Unlock Admin</button>
+        </div>
+      </form>
     </div>
   </div>
 

@@ -10,6 +10,8 @@ let vaultVariantFilter = "all";
 let soundEnabled = false;
 let lastSeenHatchId = 0;
 let hatchesHydrated = false;
+let authState = { auth_enabled: false, public_read: true, is_admin: true, ingest_key_required: false };
+let connectorConfig = null;
 
 let tpsChart = null;
 const maxChartPoints = 40;
@@ -134,6 +136,9 @@ async function apiFetch(endpoint, options = {}) {
   const res = await fetch(endpoint, options);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
+    if (res.status === 401 && endpoint !== "/api/v1/auth/login") {
+      document.getElementById("adminAuthModal")?.classList.add("open");
+    }
     throw new Error(err.detail || "API request failed");
   }
   return await res.json();
@@ -145,23 +150,128 @@ document.addEventListener("DOMContentLoaded", () => {
   initDynamicEndpoints();
   initChart();
   setupEventListeners();
-  Promise.all([loadOverview(), loadAccounts(), loadSecretsVault(), loadPetCatalog(), loadHatches(), loadAlertSettings(), loadInspectorReports()])
-    .finally(() => {
-      connectSSE();
-      if (window.lucide) lucide.createIcons();
-    });
+  Promise.all([
+    loadAuthStatus(),
+    loadConnectorConfig(),
+    loadOverview(),
+    loadAccounts(),
+    loadSecretsVault(),
+    loadPetCatalog(),
+    loadHatches(),
+    loadAlertSettings(),
+    loadInspectorReports(),
+  ]).finally(() => {
+    connectSSE();
+    if (window.lucide) lucide.createIcons();
+  });
 });
 
 function initDynamicEndpoints() {
   const origin = window.location.origin;
   const teleUrl = `${origin}/api/v1/telemetry`;
   const whUrl = `${origin}/api/v1/webhook/discord`;
+  const loaderUrl = `${origin}/loader.lua`;
   const elTele = document.getElementById("telemetryEndpointUrl");
   const elWh = document.getElementById("inboundWebhookUrl");
   const dl = document.getElementById("btnDownloadScript");
   if (elTele) elTele.textContent = teleUrl;
   if (elWh) elWh.textContent = whUrl;
   if (dl) dl.href = `/api/v1/connector/script.lua?endpoint=${encodeURIComponent(teleUrl)}`;
+  renderExecutorLoaderSnippets(loaderUrl, "YOUR_TRACKSTATS_KEY", false, false);
+}
+
+function renderExecutorLoaderSnippets(loaderUrl, keyVal, keyRequired, isAdmin) {
+  const cleanLoader = loaderUrl || `${window.location.origin}/loader.lua`;
+  const effectiveKey = keyRequired ? (keyVal || "YOUR_TRACKSTATS_KEY") : (keyVal || "");
+  const snippetEl = document.getElementById("executorLoaderSnippet");
+  const fallbackEl = document.getElementById("executorFallbackSnippet");
+  const noticeEl = document.getElementById("connectorKeyNotice");
+  const noticeText = document.getElementById("connectorKeyNoticeText");
+  const unlockBtn = document.getElementById("btnUnlockFromConnector");
+
+  if (snippetEl) {
+    if (effectiveKey) {
+      snippetEl.textContent =
+        `getgenv().TrackStats = {\n` +
+        `    Key = "${effectiveKey}",\n` +
+        `    Interval = 2,\n` +
+        `}\n` +
+        `loadstring(game:HttpGet("${cleanLoader}"))()`;
+    } else {
+      snippetEl.textContent =
+        `getgenv().TrackStats = {\n` +
+        `    Interval = 2,\n` +
+        `}\n` +
+        `loadstring(game:HttpGet("${cleanLoader}"))()`;
+    }
+  }
+
+  if (fallbackEl) {
+    const keyPart = effectiveKey ? `Key = "${effectiveKey}", ` : "";
+    fallbackEl.textContent =
+      `getgenv().TrackStats = { ${keyPart}Interval = 2 }\n` +
+      `local req = request or http_request or (syn and syn.request)\n` +
+      `loadstring(req({ Url = "${cleanLoader}", Method = "GET" }).Body)()`;
+  }
+
+  if (noticeEl && noticeText && unlockBtn) {
+    if (keyRequired && !isAdmin) {
+      noticeEl.className = "connector-key-banner locked";
+      noticeText.textContent = "Public View-Only mode: Key is hidden from guests. Unlock Admin to auto-fill your real Ingest Key.";
+      unlockBtn.style.display = "inline-flex";
+    } else if (keyRequired && isAdmin && keyVal) {
+      noticeEl.className = "connector-key-banner unlocked";
+      noticeText.textContent = "Admin Unlocked: Your live Ingest Key is embedded in the script below — ready to copy & paste into your executor!";
+      unlockBtn.style.display = "none";
+    } else {
+      noticeEl.className = "connector-key-banner";
+      noticeText.textContent = "Local open mode: Copy and paste directly into your executor or autoexec folder.";
+      unlockBtn.style.display = "none";
+    }
+  }
+}
+
+async function loadAuthStatus() {
+  try {
+    authState = await apiFetch("/api/v1/auth/status");
+    const btn = document.getElementById("btnAdminAuth");
+    const txt = document.getElementById("adminAuthText");
+    const logoutBtn = document.getElementById("btnAdminLogout");
+    if (btn && txt) {
+      if (!authState.auth_enabled) {
+        txt.textContent = "Local Admin";
+        btn.classList.add("admin-pill-unlocked");
+      } else if (authState.is_admin) {
+        txt.textContent = "Admin Unlocked";
+        btn.classList.add("admin-pill-unlocked");
+      } else {
+        txt.textContent = "View-Only (Unlock)";
+        btn.classList.remove("admin-pill-unlocked");
+      }
+    }
+    if (logoutBtn) {
+      logoutBtn.style.display = authState.auth_enabled && authState.is_admin ? "inline-flex" : "none";
+    }
+    document.body.classList.toggle("guest-readonly", Boolean(authState.auth_enabled && !authState.is_admin));
+  } catch (_) {}
+}
+
+async function loadConnectorConfig() {
+  try {
+    const cfg = await apiFetch("/api/v1/connector/config");
+    connectorConfig = cfg;
+    const elTele = document.getElementById("telemetryEndpointUrl");
+    const elWh = document.getElementById("inboundWebhookUrl");
+    const dl = document.getElementById("btnDownloadScript");
+    if (elTele && cfg.telemetry_url) elTele.textContent = cfg.telemetry_url;
+    if (elWh && cfg.webhook_url) {
+      elWh.textContent = cfg.ingest_key && cfg.is_admin ? `${cfg.webhook_url}?key=${cfg.ingest_key}` : cfg.webhook_url;
+    }
+    if (dl && cfg.telemetry_url) {
+      dl.href = `/api/v1/connector/script.lua?endpoint=${encodeURIComponent(cfg.telemetry_url)}`;
+    }
+    renderExecutorLoaderSnippets(cfg.loader_url, cfg.ingest_key, cfg.ingest_key_required, cfg.is_admin);
+  } catch (_) {}
 }
 
 function switchTab(tabName) {
@@ -1226,10 +1336,59 @@ function setupEventListeners() {
   });
 
   // Connector actions
+  document.getElementById("btnCopyLoaderSnippet")?.addEventListener("click", async () => {
+    const txt = document.getElementById("executorLoaderSnippet")?.textContent || "";
+    await navigator.clipboard?.writeText(txt);
+    showToast("Copied Executor loadstring script to clipboard!");
+  });
+
+  document.getElementById("btnCopyFallbackSnippet")?.addEventListener("click", async () => {
+    const txt = document.getElementById("executorFallbackSnippet")?.textContent || "";
+    await navigator.clipboard?.writeText(txt);
+    showToast("Copied Fallback Executor script to clipboard!");
+  });
+
   document.getElementById("btnCopyEndpoint")?.addEventListener("click", async () => {
     const txt = document.getElementById("telemetryEndpointUrl").textContent;
     await navigator.clipboard?.writeText(txt);
     showToast("Telemetry endpoint copied");
+  });
+
+  // Admin Unlock Modal
+  const adminModal = document.getElementById("adminAuthModal");
+  const openAdminModal = () => {
+    adminModal?.classList.add("open");
+    document.getElementById("inputAdminPassword")?.focus();
+  };
+  document.getElementById("btnAdminAuth")?.addEventListener("click", openAdminModal);
+  document.getElementById("btnUnlockFromConnector")?.addEventListener("click", openAdminModal);
+  document.getElementById("btnCloseAdminModal")?.addEventListener("click", () => adminModal?.classList.remove("open"));
+  document.getElementById("btnCancelAdminModal")?.addEventListener("click", () => adminModal?.classList.remove("open"));
+
+  document.getElementById("formAdminAuth")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const pwInput = document.getElementById("inputAdminPassword");
+    const password = (pwInput?.value || "").trim();
+    try {
+      await apiFetch("/api/v1/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      if (pwInput) pwInput.value = "";
+      adminModal?.classList.remove("open");
+      await Promise.all([loadAuthStatus(), loadConnectorConfig(), loadAlertSettings()]);
+      showToast("Admin unlocked! Your real Executor Key is now filled in Connector.");
+    } catch (err) {
+      showToast("Admin login failed: " + err.message, "error");
+    }
+  });
+
+  document.getElementById("btnAdminLogout")?.addEventListener("click", async () => {
+    await apiFetch("/api/v1/auth/logout", { method: "POST" });
+    adminModal?.classList.remove("open");
+    await Promise.all([loadAuthStatus(), loadConnectorConfig()]);
+    showToast("Admin locked (View-Only mode)");
   });
 
   document.getElementById("btnCopyInboundWebhook")?.addEventListener("click", async () => {

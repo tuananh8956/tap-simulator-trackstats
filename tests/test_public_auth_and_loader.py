@@ -135,3 +135,18 @@ def test_loader_lua_rejects_malicious_host_header_injection(client):
     )
     assert res.status_code == 200
     assert "while true do end" not in res.text
+
+
+def test_dashboard_html_contains_executor_loader_and_admin_modal(client):
+    html = client.get("/").text
+    assert 'id="executorLoaderSnippet"' in html
+    assert 'id="btnCopyLoaderSnippet"' in html
+    assert 'id="executorFallbackSnippet"' in html
+    assert 'id="btnCopyFallbackSnippet"' in html
+    assert 'id="btnAdminAuth"' in html
+    assert 'id="adminAuthModal"' in html
+
+    js = client.get("/static/js/app.js").text
+    assert "loadConnectorConfig" in js
+    assert "/api/v1/auth/login" in js
+    assert "/loader.lua" in js
