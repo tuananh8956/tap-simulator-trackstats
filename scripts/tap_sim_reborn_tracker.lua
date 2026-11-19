@@ -13,7 +13,7 @@
 ===============================================================================
 ]]
 
-local SCRIPT_VERSION = "2.4.3"
+local SCRIPT_VERSION = "2.4.4"
 
 local CONFIG = {
     ENDPOINT_URL = "http://127.0.0.1:3883/api/v1/telemetry",
@@ -2250,6 +2250,31 @@ local function getPetActionRemote()
     return re and re:FindFirstChild("PetActionRequested") or nil
 end
 
+-- Helper to get RemoteServices.TradingService.RE.TradeRequested
+local function getTradeRequestedRemote()
+    if not ReplicatedStorage then return nil end
+    local rs = ReplicatedStorage:FindFirstChild("RemoteServices")
+    local trSvc = rs and rs:FindFirstChild("TradingService")
+    local re = trSvc and trSvc:FindFirstChild("RE")
+    return re and re:FindFirstChild("TradeRequested") or nil
+end
+
+-- Helper to get TradingController:GetDebugState() safely
+local function getTradingDebugState()
+    local apis = discoverTradingAndPetApis()
+    local tradingCtrl = apis.tradingMods["TradingController"]
+    if type(tradingCtrl) == "table" and type(tradingCtrl.GetDebugState) == "function" then
+        local ok, st = pcall(function() return tradingCtrl:GetDebugState() end)
+        if not ok or type(st) ~= "table" then
+            ok, st = pcall(function() return tradingCtrl.GetDebugState() end)
+        end
+        if ok and type(st) == "table" then
+            return st
+        end
+    end
+    return nil
+end
+
 -- Auto-Unequip all Secret pets on the clone account using authoritative PetService.RE.PetActionRequested
 local function unequipSecretPets(secretRecords)
     local apis = discoverTradingAndPetApis()
@@ -2316,14 +2341,15 @@ local function ensureTradeRequestsEnabled()
         if type(repData) == "table" and type(repData.Settings) == "table" then
             local cur = repData.Settings.TradeRequests
             if cur == false or cur == "Off" or cur == "None" or cur == "Disabled" or cur == 0 then
-                local apis = discoverTradingAndPetApis()
-                invokeRemoteOrMethod(
-                    apis.uiMods,
-                    { "Set", "SetSetting", "UpdateSetting" },
-                    { "SetSetting", "UpdateSetting", "ChangeSetting", "Settings" },
-                    "TradeRequests",
-                    true
-                )
+                local rs = ReplicatedStorage and ReplicatedStorage:FindFirstChild("RemoteServices")
+                local setSvc = rs and rs:FindFirstChild("SettingsService")
+                local rf = setSvc and setSvc:FindFirstChild("RF") and setSvc.RF:FindFirstChild("UpdateSetting")
+                if rf and rf:IsA("RemoteFunction") then
+                    task.spawn(function()
+                        pcall(function() rf:InvokeServer("TradeRequests", "All") end)
+                        pcall(function() rf:InvokeServer("TradeRequests", 1) end)
+                    end)
+                end
             end
         end
     end)
@@ -2368,6 +2394,15 @@ local function getTradingScreenGui()
 end
 
 local function isTradePartnerVerified(trustedSet)
+    -- 1. Check authoritative TradingController:GetDebugState().PartnerUserId first
+    local dState = getTradingDebugState()
+    if type(dState) == "table" and dState.PartnerUserId then
+        if trustedSet[tostring(dState.PartnerUserId)] then
+            return true
+        end
+    end
+
+    -- 2. Fallback: Check PlayerGui.Trading partner name labels (Build.Table.Them.Name / Review.Them.Sub)
     local tGui = getTradingScreenGui()
     if not tGui or not tGui.Enabled then
         return false
@@ -2387,6 +2422,13 @@ local function isTradePartnerVerified(trustedSet)
 end
 
 local function isActiveTradeWindowVisible(trustedSet)
+    local dState = getTradingDebugState()
+    if type(dState) == "table" and dState.TradingVisible == true then
+        if type(trustedSet) == "table" then
+            return isTradePartnerVerified(trustedSet)
+        end
+        return true
+    end
     local tGui = getTradingScreenGui()
     if not tGui or not tGui.Enabled then
         return false
@@ -2416,31 +2458,61 @@ local function requestTradeWithPlayer(targetPlayer)
     end
     lastTradeRequestAt = os.time()
 
+    -- 1. Authoritative TradingService.RE.TradeRequested:FireServer({ Action = "Request", TargetUserId = ... })
+    local tradeRE = getTradeRequestedRemote()
+    if tradeRE then
+        pcall(function()
+            tradeRE:FireServer({ Action = "Request", TargetUserId = targetPlayer.UserId })
+        end)
+    end
+
+    -- 2. Also call TradingController:RequestTrade(targetPlayer.UserId)
     local apis = discoverTradingAndPetApis()
-    invokeRemoteOrMethod(
-        apis.tradingMods,
-        { "RequestTrade", "SendTradeRequest", "SendRequest", "Request", "Invite", "StartTrade" },
-        { "RequestTrade", "SendTradeRequest", "TradeRequest", "SendRequest", "InviteTrade" },
-        targetPlayer,
-        targetPlayer.UserId
-    )
-    invokeRemoteOrMethod(
-        apis.tradingMods,
-        { "RequestTrade", "SendTradeRequest", "SendRequest", "Request", "Invite" },
-        { "RequestTrade", "SendTradeRequest", "TradeRequest" },
-        targetPlayer.UserId
-    )
+    local tradingCtrl = apis.tradingMods["TradingController"]
+    if type(tradingCtrl) == "table" and type(tradingCtrl.RequestTrade) == "function" then
+        pcall(function() tradingCtrl:RequestTrade(targetPlayer.UserId) end)
+        pcall(function() tradingCtrl.RequestTrade(targetPlayer.UserId) end)
+        pcall(function() tradingCtrl:RequestTrade(targetPlayer) end)
+    end
 end
+
+local function getInternalTogglePetFn(tradingCtrl)
+    if type(tradingCtrl) ~= "table" or type(tradingCtrl.DebugTogglePet) ~= "function" then
+        return nil
+    end
+    local getUpvals = (type(debug) == "table" and debug.getupvalues) or getupvalues
+    if type(getUpvals) ~= "function" then
+        return nil
+    end
+    local ok, upvals = pcall(getUpvals, tradingCtrl.DebugTogglePet)
+    if not ok or type(upvals) ~= "table" then
+        return nil
+    end
+    if type(upvals[3]) == "function" then
+        return upvals[3]
+    end
+    for idx, uv in pairs(upvals) do
+        if type(uv) == "function" and idx ~= 1 then
+            return uv
+        end
+    end
+    return nil
+end
+
+local offerRevisionCounter = 0
 
 local function offerSecretPetsAndConfirm(secretRecords, targetPlayer)
     local apis = discoverTradingAndPetApis()
     local tradingCtrl = apis.tradingMods["TradingController"]
+    local tradeRE = getTradeRequestedRemote()
+    local dState = getTradingDebugState()
 
     if os.time() - lastTradeOfferAt >= 2 then
         lastTradeOfferAt = os.time()
 
         -- Read already-offered pet UUIDs from TradingController:GetOfferedPets() so we never toggle off an already-added Secret!
         local alreadyOffered = {}
+        local currentOfferedCount = 0
         if type(tradingCtrl) == "table" and type(tradingCtrl.GetOfferedPets) == "function" then
             pcall(function()
                 local ok, offered = pcall(function() return tradingCtrl:GetOfferedPets() end)
@@ -2451,52 +2523,73 @@ local function offerSecretPetsAndConfirm(secretRecords, targetPlayer)
                     for k, v in pairs(offered) do
                         if type(v) == "string" or type(v) == "number" then
                             alreadyOffered[tostring(v)] = true
-                        elseif type(v) == "table" and (v.Id or v.UUID or v.id) then
-                            alreadyOffered[tostring(v.Id or v.UUID or v.id)] = true
+                            currentOfferedCount = currentOfferedCount + 1
+                        elseif type(v) == "table" and (v.Id or v.UUID or v.Uid or v.id) then
+                            alreadyOffered[tostring(v.Id or v.UUID or v.Uid or v.id)] = true
+                            currentOfferedCount = currentOfferedCount + 1
                         elseif v == true then
                             alreadyOffered[tostring(k)] = true
+                            currentOfferedCount = currentOfferedCount + 1
                         end
                     end
                 end
             end)
         end
 
-        -- Offer up to 20 secrets per trade (Shared.Trading.TradeTokens.MaxPets = 40, Build.Table.You.Count = 20)
-        local addedCount = 0
+        local internalToggleFn = getInternalTogglePetFn(tradingCtrl)
+        local targetRefs = {}
+        local targetPetIds = {}
+
+        -- Offer up to 20 secrets per trade (Build.Table.You.Count = 20)
         for _, rec in ipairs(secretRecords) do
-            if addedCount < 20 and not alreadyOffered[rec.uuid] then
-                addedCount = addedCount + 1
-                local toggled = false
-                if type(tradingCtrl) == "table" and type(tradingCtrl.DebugTogglePet) == "function" then
-                    local ok = pcall(function() tradingCtrl:DebugTogglePet(rec.uuid) end)
-                    if not ok then
-                        ok = pcall(function() tradingCtrl.DebugTogglePet(rec.uuid) end)
+            if #targetPetIds < 20 then
+                table.insert(targetPetIds, rec.uuid)
+                table.insert(targetRefs, { TypeName = "Pet", Uid = rec.uuid, Amount = 1 })
+                if not alreadyOffered[rec.uuid] and currentOfferedCount < 20 then
+                    currentOfferedCount = currentOfferedCount + 1
+                    local toggled = false
+                    if type(internalToggleFn) == "function" then
+                        toggled = pcall(internalToggleFn, rec.uuid)
                     end
-                    toggled = ok
-                end
-                if not toggled then
-                    invokeRemoteOrMethod(
-                        apis.tradingMods,
-                        { "DebugTogglePet", "AddPet", "OfferPet", "AddItem", "TogglePet", "SelectPet" },
-                        { "TradingService.RF.TogglePet", "TradingService.RF.AddPet", "TradingService.RE.TogglePet", "AddTradePet", "OfferPet" },
-                        rec.uuid
-                    )
+                    if not toggled and type(tradingCtrl) == "table" and type(tradingCtrl.DebugTogglePet) == "function" then
+                        toggled = pcall(function() tradingCtrl:DebugTogglePet(rec.uuid) end)
+                            or pcall(function() tradingCtrl.DebugTogglePet(rec.uuid) end)
+                    end
                 end
             end
         end
+
+        -- Authoritative fallback via TradingService.RE.TradeRequested:FireServer({ Action = "Offer", ... }) if 0 offered so far
+        local selectedCount = (type(dState) == "table" and tonumber(dState.SelectedOfferCount)) or currentOfferedCount
+        if selectedCount == 0 and tradeRE and #targetPetIds > 0 then
+            offerRevisionCounter = offerRevisionCounter + 1
+            pcall(function()
+                tradeRE:FireServer({
+                    Action = "Offer",
+                    Revision = offerRevisionCounter,
+                    PetIds = targetPetIds,
+                    Refs = targetRefs,
+                    Tokens = 0,
+                })
+            end)
+        end
     end
 
-    -- Trigger ActivateReady() on TradingController + Ready button in PlayerGui.Trading.Trading.Build.Actions.Ready.Button
+    -- Trigger ActivateReady() + authoritative TradeRequested Lock & Confirm
     if type(tradingCtrl) == "table" and type(tradingCtrl.ActivateReady) == "function" then
         pcall(function() tradingCtrl:ActivateReady() end)
         pcall(function() tradingCtrl.ActivateReady() end)
     end
-    invokeRemoteOrMethod(
-        apis.tradingMods,
-        { "ActivateReady", "SetReady", "Ready", "Accept", "Confirm", "ConfirmTrade", "AcceptTrade" },
-        { "TradingService.RF.Ready", "TradingService.RF.SetReady", "TradingService.RF.Confirm", "SetTradeReady", "TradeReady", "ConfirmTrade" },
-        true
-    )
+    if tradeRE then
+        if not (type(dState) == "table" and dState.LocalLocked == true) then
+            pcall(function()
+                tradeRE:FireServer({ Action = "Lock", Locked = true })
+            end)
+        end
+        pcall(function()
+            tradeRE:FireServer({ Action = "Confirm" })
+        end)
+    end
 
     local tGui = getTradingScreenGui()
     if tGui then
@@ -2520,29 +2613,34 @@ end
 
 local function acceptIncomingTradeAndConfirm(trustedSet)
     local apis = discoverTradingAndPetApis()
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer and (trustedSet[tostring(plr.UserId)] or trustedSet[plr.Name:lower()]) then
-            invokeRemoteOrMethod(
-                apis.tradingMods,
-                { "AcceptRequest", "AcceptTradeRequest", "AcceptInvite", "RespondToRequest", "Accept" },
-                { "AcceptTradeRequest", "AcceptRequest", "TradeAcceptRequest", "RespondTradeRequest" },
-                plr,
-                true
-            )
-            invokeRemoteOrMethod(
-                apis.tradingMods,
-                { "AcceptRequest", "AcceptTradeRequest", "AcceptInvite", "RespondToRequest" },
-                { "AcceptTradeRequest", "AcceptRequest", "TradeAcceptRequest" },
-                plr.UserId,
-                true
-            )
+    local tradingCtrl = apis.tradingMods["TradingController"]
+    local tradeRE = getTradeRequestedRemote()
+    local dState = getTradingDebugState()
+
+    -- 1. Check if there is an incoming trade request from a trusted clone (dState.RequestUserId)
+    if type(dState) == "table" and dState.RequestUserId and trustedSet[tostring(dState.RequestUserId)] then
+        if tradeRE then
+            pcall(function()
+                tradeRE:FireServer({ Action = "Respond", Accepted = true })
+            end)
+        end
+    elseif tradeRE then
+        -- Also check if any trusted clone is currently in the server and we are not yet in a trade window
+        if not (type(dState) == "table" and dState.TradingVisible == true) then
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr ~= LocalPlayer and (trustedSet[tostring(plr.UserId)] or trustedSet[plr.Name:lower()]) then
+                    pcall(function()
+                        tradeRE:FireServer({ Action = "Respond", Accepted = true, FromUserId = plr.UserId })
+                    end)
+                end
+            end
         end
     end
 
-    -- Scan PlayerGui.Trading (or verified trade request prompt mentioning a trusted username)
+    -- 2. Scan PlayerGui.Trading (or verified trade request prompt mentioning a trusted username)
     local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
     if pg then
-        for _, gui in ipairs({ pg:FindFirstChild("Trading"), pg:FindFirstChild("Dialogs"), pg:FindFirstChild("Dialog") }) do
+        for _, gui in ipairs({ pg:FindFirstChild("Trading"), pg:FindFirstChild("Dialogs"), pg:FindFirstChild("Dialog"), pg:FindFirstChild("Tabs") }) do
             if gui and gui:IsA("ScreenGui") and gui.Enabled then
                 local guiVerified = (gui.Name == "Trading" and isTradePartnerVerified(trustedSet))
                 if not guiVerified then
@@ -2578,18 +2676,26 @@ local function acceptIncomingTradeAndConfirm(trustedSet)
         end
     end
 
+    -- 3. In an active verified trade with a trusted clone, once the clone has added pets (OtherOfferCount > 0 or OtherLocked), lock & confirm!
     if isActiveTradeWindowVisible(trustedSet) then
-        local tradingCtrl = apis.tradingMods["TradingController"]
-        if type(tradingCtrl) == "table" and type(tradingCtrl.ActivateReady) == "function" then
-            pcall(function() tradingCtrl:ActivateReady() end)
-            pcall(function() tradingCtrl.ActivateReady() end)
+        local otherCount = (type(dState) == "table" and tonumber(dState.OtherOfferCount)) or 1
+        local otherLocked = (type(dState) == "table" and dState.OtherLocked == true)
+        if otherCount > 0 or otherLocked or not dState then
+            if type(tradingCtrl) == "table" and type(tradingCtrl.ActivateReady) == "function" then
+                pcall(function() tradingCtrl:ActivateReady() end)
+                pcall(function() tradingCtrl.ActivateReady() end)
+            end
+            if tradeRE then
+                if not (type(dState) == "table" and dState.LocalLocked == true) then
+                    pcall(function()
+                        tradeRE:FireServer({ Action = "Lock", Locked = true })
+                    end)
+                end
+                pcall(function()
+                    tradeRE:FireServer({ Action = "Confirm" })
+                end)
+            end
         end
-        invokeRemoteOrMethod(
-            apis.tradingMods,
-            { "ActivateReady", "SetReady", "Ready", "Accept", "Confirm", "ConfirmTrade", "AcceptTrade" },
-            { "TradingService.RF.Ready", "TradingService.RF.SetReady", "TradingService.RF.Confirm", "SetTradeReady", "TradeReady", "ReadyTrade", "AcceptTrade", "ConfirmTrade" },
-            true
-        )
     end
 end
 
