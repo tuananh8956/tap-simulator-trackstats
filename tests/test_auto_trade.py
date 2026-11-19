@@ -213,9 +213,11 @@ from pathlib import Path
 def test_luau_script_contains_v240_auto_trade_engine():
     lua_path = Path(__file__).resolve().parent.parent / "scripts" / "tap_sim_reborn_tracker.lua"
     src = lua_path.read_text(encoding="utf-8")
-    assert 'local SCRIPT_VERSION = "2.4.0"' in src
+    assert 'local SCRIPT_VERSION = "2.4.1"' in src
     assert "Controllers.Trading" in src
     assert "Shared.Trading" in src
+    assert "DebugTogglePet" in src
+    assert "ActivateReady" in src
     assert "TeleportToPlaceInstance" in src
     assert "queue_on_teleport" in src
     assert "trade_directive" in src

