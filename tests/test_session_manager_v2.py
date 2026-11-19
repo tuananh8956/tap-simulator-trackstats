@@ -120,7 +120,7 @@ def test_delta_secret_detection_and_farm_overview_and_boost_countdown(tmp_path):
     state = mgr.get_live_state(10, now=1020.0)
     assert state["eggs_per_hour"] > 0
     assert state["active_boosts"][0]["remainingSec"] == 100.0
-    assert state["secret_pets"][0]["image_url"] == "/static/assets/pets/chronos.svg"
+    assert state["secret_pets"][0]["image_url"] == "/static/assets/pets/chronos.png"
 
     overview = mgr.get_overview(now=1020.0)
     assert overview["total_secrets"] == 2

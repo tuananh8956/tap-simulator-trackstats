@@ -1,5 +1,6 @@
 import hashlib
 import html
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from src.database import Database
@@ -23,14 +24,23 @@ SEEDED_SECRETS: List[Dict[str, str]] = [
     {"name": "Forsaken Knight", "tier": "Secret III", "default_egg": "Void Egg", "odds": "1 in 4M"},
     {"name": "Dragon Tamer", "tier": "Secret III", "default_egg": "Draconic Egg", "odds": "1 in 4M"},
     {"name": "King Of Hell", "tier": "Secret III", "default_egg": "Volcanic Egg", "odds": "1 in 5M"},
-    {"name": "Malevolent Treat", "tier": "Event", "default_egg": "Pumpkin Egg", "odds": "1 in 5M"},
+    {"name": "Malevolent Treat", "tier": "Secret III", "default_egg": "Pumpkin Egg", "odds": "1 in 5M"},
     {"name": "Sanguine Heart", "tier": "Secret III", "default_egg": "Crimson Egg", "odds": "1 in 8M"},
     {"name": "Peace Keeper", "tier": "Secret III", "default_egg": "Celestial Egg", "odds": "1 in 8M"},
     {"name": "Time Paradox", "tier": "Secret III", "default_egg": "Chronos Egg", "odds": "1 in 10M"},
     {"name": "Dark Cat", "tier": "Secret III", "default_egg": "Void Egg", "odds": "1 in 10M"},
 ]
 
+SLUG_ALIASES: Dict[str, str] = {
+    "oaisis-spirit": "oasis-spirit",
+    "chronus": "chronos",
+    "blue-briar-palidin": "blue-briar-paladin",
+    "nameless-diety": "nameless-deity",
+    "imperfection": "30m-imperfection",
+}
+
 _DEFAULT_ASSETS_DIR = Path(__file__).resolve().parent / "static" / "assets" / "pets"
+_RASTER_EXTS = (".png", ".webp", ".jpg", ".jpeg")
 
 _PALETTES = [
     ("#a855f7", "#ec4899", "#1e1035"),
@@ -46,21 +56,87 @@ class PetCatalogService:
     def __init__(self, db: Database, assets_dir: Optional[Path] = None):
         self.db = db
         self.assets_dir = Path(assets_dir) if assets_dir else _DEFAULT_ASSETS_DIR
+        self._aliases: Dict[str, str] = dict(SLUG_ALIASES)
+        self._manifest_entries: List[Dict[str, Any]] = self._load_manifest()
+
+    def _load_manifest(self) -> List[Dict[str, Any]]:
+        manifest_path = self.assets_dir / "catalog_manifest.json"
+        if not manifest_path.exists():
+            return []
+        try:
+            entries = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(entries, list):
+                return []
+            for entry in entries:
+                canonical = slugify_pet_name(entry.get("slug") or entry.get("name") or "")
+                for alias in entry.get("aliases", []) or []:
+                    a_slug = slugify_pet_name(alias)
+                    if a_slug and canonical:
+                        self._aliases[a_slug] = canonical
+            return entries
+        except Exception:
+            return []
+
+    def canonical_slug(self, name_or_slug: str) -> str:
+        raw_slug = slugify_pet_name(name_or_slug)
+        return self._aliases.get(raw_slug, raw_slug)
 
     def seed_defaults(self) -> int:
-        count = 0
+        seeded: Dict[str, Dict[str, Any]] = {}
+
+        # Load real in-game Secret catalog from catalog_manifest.json first
+        for entry in self._manifest_entries:
+            slug = self.canonical_slug(entry.get("slug") or entry.get("name") or "")
+            if not slug:
+                continue
+            seeded[slug] = {
+                "slug": slug,
+                "name": entry["name"],
+                "tier": entry.get("tier") or "Secret",
+                "default_egg": entry.get("default_egg") or "Secret Pool",
+                "odds": entry.get("odds") or "Rare",
+            }
+
+        # Ensure all core fallback SEEDED_SECRETS exist (preserving richer egg/odds metadata)
         for item in SEEDED_SECRETS:
-            slug = slugify_pet_name(item["name"])
+            slug = self.canonical_slug(item["name"])
+            if slug not in seeded:
+                seeded[slug] = {
+                    "slug": slug,
+                    "name": item["name"],
+                    "tier": item.get("tier"),
+                    "default_egg": item.get("default_egg"),
+                    "odds": item.get("odds"),
+                }
+            else:
+                if seeded[slug].get("default_egg") == "Secret Pool" and item.get("default_egg"):
+                    seeded[slug]["default_egg"] = item["default_egg"]
+                if seeded[slug].get("odds") == "Rare" and item.get("odds"):
+                    seeded[slug]["odds"] = item["odds"]
+
+        count = 0
+        for rec in seeded.values():
             self.db.upsert_pet_catalog(
-                slug=slug,
-                name=item["name"],
+                slug=rec["slug"],
+                name=rec["name"],
                 rarity="Secret",
-                tier=item.get("tier"),
-                default_egg=item.get("default_egg"),
-                odds=item.get("odds"),
+                tier=rec.get("tier"),
+                default_egg=rec.get("default_egg"),
+                odds=rec.get("odds"),
             )
             count += 1
         return count
+
+    def _find_local_asset_url(self, slug: str) -> Optional[str]:
+        # Prefer real in-game raster renders (.png/.webp/.jpg) before curated .svg fallback
+        for ext in _RASTER_EXTS:
+            candidate = self.assets_dir / f"{slug}{ext}"
+            if candidate.exists():
+                return f"/static/assets/pets/{slug}{ext}"
+        local_svg = self.assets_dir / f"{slug}.svg"
+        if local_svg.exists():
+            return f"/static/assets/pets/{slug}.svg"
+        return None
 
     def resolve_image_url(
         self,
@@ -68,7 +144,7 @@ class PetCatalogService:
         explicit_url: Optional[str] = None,
         asset_id: Optional[int] = None,
     ) -> str:
-        slug = slugify_pet_name(name)
+        slug = self.canonical_slug(name)
         item = self.db.get_pet_catalog_item(slug)
 
         # 1. User custom override
@@ -88,10 +164,10 @@ class PetCatalogService:
             if resolved:
                 return resolved
 
-        # 4. Curated local SVG file
-        local_svg = self.assets_dir / f"{slug}.svg"
-        if local_svg.exists():
-            return f"/static/assets/pets/{slug}.svg"
+        # 4. Real in-game local render (.png/.webp/.jpg) or curated local SVG
+        local_url = self._find_local_asset_url(slug)
+        if local_url:
+            return local_url
 
         # 5. Dynamic procedural SVG fallback
         return f"/api/v1/pets/icon/{slug}.svg"
@@ -105,7 +181,7 @@ class PetCatalogService:
         odds: Optional[str] = None,
         image_asset_id: Optional[int] = None,
     ) -> Dict[str, Any]:
-        slug = slugify_pet_name(name)
+        slug = self.canonical_slug(name)
         return self.db.upsert_pet_catalog(
             slug=slug,
             name=(name or "Unknown Secret").strip() or "Unknown Secret",
@@ -117,7 +193,7 @@ class PetCatalogService:
         )
 
     def set_resolved_thumbnail(self, slug: str, asset_id: int, thumbnail_url: str) -> None:
-        clean_slug = slugify_pet_name(slug)
+        clean_slug = self.canonical_slug(slug)
         safe_url = sanitize_image_url(thumbnail_url)
         if not safe_url:
             return
@@ -139,7 +215,7 @@ class PetCatalogService:
         default_egg: Optional[str] = None,
         odds: Optional[str] = None,
     ) -> Dict[str, Any]:
-        clean_slug = slugify_pet_name(slug)
+        clean_slug = self.canonical_slug(slug)
         existing = self.db.get_pet_catalog_item(clean_slug)
         name = existing["name"] if existing else clean_slug.replace("-", " ").title()
         safe_url = sanitize_image_url(image_url) if image_url is not None else None
@@ -158,8 +234,11 @@ class PetCatalogService:
         updated["image_url"] = self.resolve_image_url(updated["name"])
         return updated
 
-    def list_catalog(self) -> List[Dict[str, Any]]:
+    def list_catalog(self, rarity: Optional[str] = None) -> List[Dict[str, Any]]:
         rows = self.db.get_pet_catalog()
+        if rarity:
+            target = rarity.strip().lower()
+            rows = [r for r in rows if (r.get("rarity") or "").lower() == target]
         for r in rows:
             r["image_url"] = self.resolve_image_url(r["name"])
         return rows
@@ -170,7 +249,7 @@ class PetCatalogService:
         name: Optional[str] = None,
         tier: Optional[str] = None,
     ) -> str:
-        clean_slug = slugify_pet_name(slug or name or "secret-pet")
+        clean_slug = self.canonical_slug(slug or name or "secret-pet")
         digest = hashlib.sha256(clean_slug.encode("utf-8")).digest()
         c1, c2, bg = _PALETTES[digest[0] % len(_PALETTES)]
         words = [w for w in clean_slug.split("-") if w]

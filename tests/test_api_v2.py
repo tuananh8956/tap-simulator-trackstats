@@ -61,12 +61,12 @@ def test_overview_secrets_catalog_and_custom_image():
     sec_data = sec.json()
     assert sec_data["total_secrets"] == 2
     assert sec_data["grouped"][0]["name"] == "Dark Cat"
-    assert sec_data["grouped"][0]["image_url"].endswith(".svg") or sec_data["grouped"][0]["image_url"].startswith("http")
+    assert sec_data["grouped"][0]["image_url"].endswith((".png", ".webp", ".jpg", ".svg")) or sec_data["grouped"][0]["image_url"].startswith("http")
 
     # Catalog list
     cat_resp = client.get("/api/v1/pets/catalog")
     assert cat_resp.status_code == 200
-    assert len(cat_resp.json()) >= 18
+    assert len(cat_resp.json()) >= 66
 
     # Override custom image
     ov_img = client.post(

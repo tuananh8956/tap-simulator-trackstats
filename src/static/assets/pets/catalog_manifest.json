@@ -1,0 +1,604 @@
+[
+  {
+    "slug": "30m-candycorn-dragon",
+    "name": "30M Candycorn Dragon",
+    "tier": "Secret III",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "30m-candycorn-dragon.png",
+    "aliases": []
+  },
+  {
+    "slug": "30m-cursed-gift",
+    "name": "30M Cursed Gift",
+    "tier": "Secret I",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "30m-cursed-gift.png",
+    "aliases": []
+  },
+  {
+    "slug": "30m-imperfection",
+    "name": "30M Imperfection",
+    "tier": "Secret III",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "30m-imperfection.png",
+    "aliases": [
+      "imperfection"
+    ]
+  },
+  {
+    "slug": "30m-vampire-coffin",
+    "name": "30M Vampire Coffin",
+    "tier": "Secret III",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "30m-vampire-coffin.png",
+    "aliases": []
+  },
+  {
+    "slug": "angelus",
+    "name": "Angelus",
+    "tier": "Secret III",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "angelus.png",
+    "aliases": []
+  },
+  {
+    "slug": "anubis",
+    "name": "Anubis",
+    "tier": "Secret II",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "anubis.png",
+    "aliases": []
+  },
+  {
+    "slug": "arch-angel",
+    "name": "Arch Angel",
+    "tier": "Secret III",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "arch-angel.png",
+    "aliases": []
+  },
+  {
+    "slug": "autumn-warden",
+    "name": "Autumn Warden",
+    "tier": "Secret I",
+    "default_egg": "Pumpkin Egg",
+    "odds": "1 in 500K",
+    "filename": "autumn-warden.png",
+    "aliases": []
+  },
+  {
+    "slug": "bloodborne-ruler",
+    "name": "Bloodborne Ruler",
+    "tier": "Secret II",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "bloodborne-ruler.png",
+    "aliases": []
+  },
+  {
+    "slug": "blue-briar-paladin",
+    "name": "Blue Briar Paladin",
+    "tier": "Secret",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "blue-briar-paladin.png",
+    "aliases": [
+      "blue-briar-palidin"
+    ]
+  },
+  {
+    "slug": "chronos",
+    "name": "Chronos",
+    "tier": "Secret II",
+    "default_egg": "Chronos Egg",
+    "odds": "1 in 2M",
+    "filename": "chronos.png",
+    "aliases": []
+  },
+  {
+    "slug": "cinder-eye",
+    "name": "Cinder Eye",
+    "tier": "Secret I",
+    "default_egg": "Draconic Egg",
+    "odds": "1 in 500K",
+    "filename": "cinder-eye.png",
+    "aliases": []
+  },
+  {
+    "slug": "count-batula",
+    "name": "Count Batula",
+    "tier": "Secret II",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "count-batula.jpg",
+    "aliases": []
+  },
+  {
+    "slug": "crimson-rose-knight",
+    "name": "Crimson Rose Knight",
+    "tier": "Secret",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "crimson-rose-knight.png",
+    "aliases": []
+  },
+  {
+    "slug": "crystal-guardian",
+    "name": "Crystal Guardian",
+    "tier": "Secret I",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "crystal-guardian.png",
+    "aliases": []
+  },
+  {
+    "slug": "crystalline-colossus",
+    "name": "Crystalline Colossus",
+    "tier": "Secret II",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "crystalline-colossus.png",
+    "aliases": []
+  },
+  {
+    "slug": "dark-cat",
+    "name": "Dark Cat",
+    "tier": "Secret III",
+    "default_egg": "Void Egg",
+    "odds": "1 in 10M",
+    "filename": "dark-cat.png",
+    "aliases": []
+  },
+  {
+    "slug": "diamond-piercer",
+    "name": "Diamond Piercer",
+    "tier": "Secret I",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "diamond-piercer.png",
+    "aliases": []
+  },
+  {
+    "slug": "dragon-tamer",
+    "name": "Dragon Tamer",
+    "tier": "Secret III",
+    "default_egg": "Draconic Egg",
+    "odds": "1 in 4M",
+    "filename": "dragon-tamer.png",
+    "aliases": []
+  },
+  {
+    "slug": "enigma",
+    "name": "Enigma",
+    "tier": "Secret",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "enigma.jpg",
+    "aliases": []
+  },
+  {
+    "slug": "eternal-emerald",
+    "name": "Eternal Emerald",
+    "tier": "Secret II",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "eternal-emerald.png",
+    "aliases": []
+  },
+  {
+    "slug": "first-light",
+    "name": "First Light",
+    "tier": "Secret",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "first-light.png",
+    "aliases": []
+  },
+  {
+    "slug": "flame-fungi",
+    "name": "Flame Fungi",
+    "tier": "Secret I",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "flame-fungi.png",
+    "aliases": []
+  },
+  {
+    "slug": "forsaken-knight",
+    "name": "Forsaken Knight",
+    "tier": "Secret III",
+    "default_egg": "Void Egg",
+    "odds": "1 in 4M",
+    "filename": "forsaken-knight.png",
+    "aliases": []
+  },
+  {
+    "slug": "frigidus",
+    "name": "Frigidus",
+    "tier": "Secret II",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "frigidus.png",
+    "aliases": []
+  },
+  {
+    "slug": "frost-behemoth",
+    "name": "Frost Behemoth",
+    "tier": "Secret III",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "frost-behemoth.png",
+    "aliases": []
+  },
+  {
+    "slug": "glacial-dragon",
+    "name": "Glacial Dragon",
+    "tier": "Secret I",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "glacial-dragon.png",
+    "aliases": []
+  },
+  {
+    "slug": "hallow-lord",
+    "name": "Hallow Lord",
+    "tier": "Secret III",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "hallow-lord.png",
+    "aliases": []
+  },
+  {
+    "slug": "headless-horseman",
+    "name": "Headless Horseman",
+    "tier": "Secret II",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "headless-horseman.png",
+    "aliases": []
+  },
+  {
+    "slug": "helfire-spirit",
+    "name": "Helfire Spirit",
+    "tier": "Secret II",
+    "default_egg": "Volcanic Egg",
+    "odds": "1 in 2M",
+    "filename": "helfire-spirit.png",
+    "aliases": []
+  },
+  {
+    "slug": "ice-age-specter",
+    "name": "Ice Age Specter",
+    "tier": "Secret I",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "ice-age-specter.png",
+    "aliases": []
+  },
+  {
+    "slug": "infernal-lord",
+    "name": "Infernal Lord",
+    "tier": "Secret II",
+    "default_egg": "Draconic Egg",
+    "odds": "1 in 2M",
+    "filename": "infernal-lord.png",
+    "aliases": []
+  },
+  {
+    "slug": "inferno-dragon",
+    "name": "Inferno Dragon",
+    "tier": "Secret I",
+    "default_egg": "Volcanic Egg",
+    "odds": "1 in 500K",
+    "filename": "inferno-dragon.png",
+    "aliases": []
+  },
+  {
+    "slug": "king-kraken",
+    "name": "King Kraken",
+    "tier": "Secret",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "king-kraken.jpg",
+    "aliases": []
+  },
+  {
+    "slug": "king-of-hell",
+    "name": "King Of Hell",
+    "tier": "Secret III",
+    "default_egg": "Volcanic Egg",
+    "odds": "1 in 5M",
+    "filename": "king-of-hell.png",
+    "aliases": []
+  },
+  {
+    "slug": "king-shroomie",
+    "name": "King Shroomie",
+    "tier": "Secret II",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "king-shroomie.png",
+    "aliases": []
+  },
+  {
+    "slug": "malevolent-treat",
+    "name": "Malevolent Treat",
+    "tier": "Secret III",
+    "default_egg": "Pumpkin Egg",
+    "odds": "1 in 5M",
+    "filename": "malevolent-treat.png",
+    "aliases": []
+  },
+  {
+    "slug": "nameless-deity",
+    "name": "Nameless Deity",
+    "tier": "Secret II",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "nameless-deity.png",
+    "aliases": [
+      "nameless-diety"
+    ]
+  },
+  {
+    "slug": "neon-cat",
+    "name": "Neon Cat",
+    "tier": "Secret",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "neon-cat.png",
+    "aliases": []
+  },
+  {
+    "slug": "nevermore",
+    "name": "Nevermore",
+    "tier": "Secret III",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "nevermore.png",
+    "aliases": []
+  },
+  {
+    "slug": "oasis-spirit",
+    "name": "Oasis Spirit",
+    "tier": "Secret I",
+    "default_egg": "Cactus Egg",
+    "odds": "1 in 500K",
+    "filename": "oasis-spirit.png",
+    "aliases": [
+      "oaisis-spirit"
+    ]
+  },
+  {
+    "slug": "operating-system",
+    "name": "Operating System",
+    "tier": "Secret I",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "operating-system.png",
+    "aliases": []
+  },
+  {
+    "slug": "operating-system-evo",
+    "name": "Operating System Evo",
+    "tier": "Secret II",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "operating-system-evo.png",
+    "aliases": []
+  },
+  {
+    "slug": "operating-system-evo-2",
+    "name": "Operating System Evo 2",
+    "tier": "Secret III",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "operating-system-evo-2.png",
+    "aliases": []
+  },
+  {
+    "slug": "operating-system-obliterated",
+    "name": "Operating System OBLITERATED",
+    "tier": "Secret",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "operating-system-obliterated.png",
+    "aliases": []
+  },
+  {
+    "slug": "orca-dominator",
+    "name": "Orca Dominator",
+    "tier": "Secret II",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "orca-dominator.jpg",
+    "aliases": []
+  },
+  {
+    "slug": "peace-keeper",
+    "name": "Peace Keeper",
+    "tier": "Secret III",
+    "default_egg": "Celestial Egg",
+    "odds": "1 in 8M",
+    "filename": "peace-keeper.jpg",
+    "aliases": []
+  },
+  {
+    "slug": "phantom-mirror",
+    "name": "Phantom Mirror",
+    "tier": "Secret II",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "phantom-mirror.png",
+    "aliases": []
+  },
+  {
+    "slug": "prestige",
+    "name": "Prestige",
+    "tier": "Secret",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "prestige.png",
+    "aliases": []
+  },
+  {
+    "slug": "reanimation",
+    "name": "Reanimation",
+    "tier": "Secret",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "reanimation.png",
+    "aliases": []
+  },
+  {
+    "slug": "release-trophy",
+    "name": "Release Trophy",
+    "tier": "Secret III",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "release-trophy.png",
+    "aliases": []
+  },
+  {
+    "slug": "riftshard",
+    "name": "Riftshard",
+    "tier": "Leaderboard",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "riftshard.png",
+    "aliases": []
+  },
+  {
+    "slug": "royal-crown",
+    "name": "Royal Crown",
+    "tier": "Secret",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "royal-crown.png",
+    "aliases": []
+  },
+  {
+    "slug": "sand-sovereign",
+    "name": "Sand Sovereign",
+    "tier": "Secret II",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "sand-sovereign.jpg",
+    "aliases": []
+  },
+  {
+    "slug": "sanguine-heart",
+    "name": "Sanguine Heart",
+    "tier": "Secret III",
+    "default_egg": "Crimson Egg",
+    "odds": "1 in 8M",
+    "filename": "sanguine-heart.png",
+    "aliases": []
+  },
+  {
+    "slug": "sharkie",
+    "name": "Sharkie",
+    "tier": "Secret I",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "sharkie.jpg",
+    "aliases": []
+  },
+  {
+    "slug": "shinigami",
+    "name": "Shinigami",
+    "tier": "Secret II",
+    "default_egg": "Void Egg",
+    "odds": "1 in 2M",
+    "filename": "shinigami.png",
+    "aliases": []
+  },
+  {
+    "slug": "soul-hunter",
+    "name": "Soul Hunter",
+    "tier": "Secret II",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "soul-hunter.png",
+    "aliases": []
+  },
+  {
+    "slug": "the-flying-dutchman",
+    "name": "The Flying Dutchman",
+    "tier": "Secret II",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "the-flying-dutchman.png",
+    "aliases": []
+  },
+  {
+    "slug": "tyrannosaurus-rex",
+    "name": "Tyrannosaurus Rex",
+    "tier": "Secret I",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "tyrannosaurus-rex.png",
+    "aliases": []
+  },
+  {
+    "slug": "vanguard",
+    "name": "Vanguard",
+    "tier": "Secret",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "vanguard.png",
+    "aliases": []
+  },
+  {
+    "slug": "void-overseer",
+    "name": "Void Overseer",
+    "tier": "Secret II",
+    "default_egg": "Void Egg",
+    "odds": "1 in 1M",
+    "filename": "void-overseer.png",
+    "aliases": []
+  },
+  {
+    "slug": "void-wraith",
+    "name": "Void Wraith",
+    "tier": "Secret I",
+    "default_egg": "Void Egg",
+    "odds": "1 in 500K",
+    "filename": "void-wraith.png",
+    "aliases": []
+  },
+  {
+    "slug": "winged-cursed-captain",
+    "name": "Winged Cursed Captain",
+    "tier": "Secret II",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "winged-cursed-captain.png",
+    "aliases": []
+  },
+  {
+    "slug": "witch-beast",
+    "name": "Witch Beast",
+    "tier": "Limited",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "witch-beast.png",
+    "aliases": []
+  },
+  {
+    "slug": "witches-hat",
+    "name": "Witches Hat",
+    "tier": "Secret II",
+    "default_egg": "Secret Pool",
+    "odds": "Rare",
+    "filename": "witches-hat.png",
+    "aliases": []
+  }
+]

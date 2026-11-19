@@ -539,7 +539,10 @@ async function loadSecretsVault() {
 
 async function loadPetCatalog() {
   try {
-    petCatalogList = await apiFetch("/api/v1/pets/catalog");
+    const allItems = await apiFetch("/api/v1/pets/catalog");
+    petCatalogList = (allItems || []).filter((item) => (item.rarity || "Secret").toLowerCase() === "secret");
+    const cntEl = document.getElementById("catalogSecretCount");
+    if (cntEl) cntEl.textContent = String(petCatalogList.length);
     if (vaultMode === "catalog") renderSecretVault();
   } catch (_) {}
 }

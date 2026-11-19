@@ -27,8 +27,8 @@ SAMPLE_SECRETS = [
         "eggSource": "Void Egg",
     },
     {
-        "id": "s_time_paradox",
-        "name": "Time Paradox",
+        "id": "s_king_of_hell",
+        "name": "King Of Hell",
         "rarity": "Secret",
         "variant": "Golden",
         "tier": "Secret III",
@@ -36,7 +36,7 @@ SAMPLE_SECRETS = [
         "multiplier": 22000.0,
         "power": 118000.0,
         "isEquipped": True,
-        "eggSource": "Chronos Egg",
+        "eggSource": "Volcanic Egg",
     },
     {
         "id": "s_sanguine_heart",

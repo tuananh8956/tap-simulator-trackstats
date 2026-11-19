@@ -13,7 +13,7 @@ A dedicated, high-performance **Real-Time Statistics Tracker, Secret Vault, and 
 
 - **Secret Vault & Per-Secret Pet Images:**
   - Tracks total Secret count across the entire farm and per account, grouped by **Secret Name** and **Variant** (`Normal`, `Golden`, `Diamond`, `Rainbow`, `Shiny`) plus Tier (`Secret I`, `Secret II`, `Secret III`, `Event`).
-  - **5-Step Image Pipeline:** Custom user image override -> safe telemetry URL -> automatic Roblox Asset Thumbnail resolution (`rbxassetid://<id>` via `thumbnails.roblox.com/v1/assets`) -> **18 bespoke SVG portraits** (`src/static/assets/pets/*.svg`) -> procedural SVG fallback (`/api/v1/pets/icon/{slug}.svg`).
+  - **5-Step Image Pipeline:** Custom user image override -> safe telemetry URL -> automatic Roblox Asset Thumbnail resolution (`rbxassetid://<id>` via `thumbnails.roblox.com/v1/assets`) -> **66 real in-game Secret pet renders** (`src/static/assets/pets/*.png|.webp|.jpg`, refreshable anytime via `python tools/sync_pet_images.py`) + 18 SVG fallback portraits -> procedural SVG fallback (`/api/v1/pets/icon/{slug}.svg`).
   - Click any Secret card to inspect which accounts hold it and customize its image URL or Roblox Asset ID.
 - **Redesigned 6-Tab Dark Cyber-Glass Website UI:**
   - Persistent **Farm Overview KPI Strip** (Online Accounts, Total Secrets + variant breakdown, Farm TPS, Farm Taps/Currency, Total Eggs & Eggs/hr).
