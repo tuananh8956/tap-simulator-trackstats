@@ -13,7 +13,7 @@
 ===============================================================================
 ]]
 
-local SCRIPT_VERSION = "2.3.4"
+local SCRIPT_VERSION = "2.4.0"
 
 local CONFIG = {
     ENDPOINT_URL = "http://127.0.0.1:3883/api/v1/telemetry",
@@ -82,6 +82,7 @@ end
 
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
+local TeleportService = pcall(function() return game:GetService("TeleportService") end) and game:GetService("TeleportService") or nil
 local ReplicatedStorage = pcall(function() return game:GetService("ReplicatedStorage") end) and game:GetService("ReplicatedStorage") or nil
 local TextChatService = pcall(function() return game:GetService("TextChatService") end) and game:GetService("TextChatService") or nil
 
@@ -1645,14 +1646,17 @@ local function sendInspectorSnapshot()
         dump.petModules = {}
         local probePaths = {
             "Controllers.Pets",
+            "Controllers.Trading",
             "Controllers.Core",
             "Controllers.Common",
             "Controllers.Game",
             "Controllers.Items",
             "Controllers.UI",
             "Shared.Pets",
+            "Shared.Trading",
             "Shared.Core",
             "Shared.Items",
+            "Packages",
             "Modules.Client",
             "Content.Pets",
         }
@@ -1712,6 +1716,21 @@ local function sendInspectorSnapshot()
                 end
             end)
         end
+
+        -- Also dump all RemoteEvents / RemoteFunctions in ReplicatedStorage for trade/pet remote discovery
+        dump.remotesList = {}
+        pcall(function()
+            for _, desc in ipairs(ReplicatedStorage:GetDescendants()) do
+                if (desc:IsA("RemoteEvent") or desc:IsA("RemoteFunction")) and #dump.remotesList < 180 then
+                    local rel = desc:GetFullName():gsub("^ReplicatedStorage%.", "")
+                    table.insert(dump.remotesList, {
+                        name = desc.Name,
+                        className = desc.ClassName,
+                        path = rel,
+                    })
+                end
+            end
+        end)
     end
 
     -- Dump actual TS2 DataController:GetReplica().Data.Pets all 10 keys & InventoryController:GetStacks() sample!
@@ -1791,6 +1810,27 @@ local function sendInspectorSnapshot()
 
     local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
     if pg then
+        dump.tradingGuiDetails = {}
+        local tradingGui = pg:FindFirstChild("Trading")
+        if tradingGui then
+            pcall(function()
+                for _, desc in ipairs(tradingGui:GetDescendants()) do
+                    if #dump.tradingGuiDetails < 100 and (desc:IsA("Frame") or desc:IsA("ScrollingFrame") or desc:IsA("TextButton") or desc:IsA("ImageButton") or desc:IsA("TextLabel")) then
+                        local entry = {
+                            name = desc.Name,
+                            className = desc.ClassName,
+                            path = desc:GetFullName():gsub("^Players%.[^%.]+%.PlayerGui%.", ""),
+                            visible = isGuiActuallyVisible(desc),
+                        }
+                        if (desc:IsA("TextButton") or desc:IsA("TextLabel")) and desc.Text and desc.Text ~= "" then
+                            entry.text = desc.Text
+                        end
+                        table.insert(dump.tradingGuiDetails, entry)
+                    end
+                end
+            end)
+        end
+
         for _, gui in ipairs(pg:GetChildren()) do
             if gui:IsA("ScreenGui") then
                 table.insert(dump.screenGuis, { name = gui.Name, enabled = gui.Enabled })
@@ -1827,6 +1867,651 @@ local function sendInspectorSnapshot()
     logDebug("Sent Inspector snapshot to " .. CONFIG.INSPECT_URL)
 end
 
+-- ===============================================================================
+--   AUTO-TRADE SECRET CONSOLIDATION ENGINE (v2.4.0)
+-- ===============================================================================
+
+local currentTradeState = "IDLE"
+local currentTradeMessage = nil
+local lastTeleportAt = 0
+local lastTradeRequestAt = 0
+local lastTradeOfferAt = 0
+local hasTradedInThisServer = false
+
+local cachedApis = nil
+local lastApiDiscoverAt = 0
+
+local function discoverTradingAndPetApis()
+    if cachedApis and (os.time() - lastApiDiscoverAt < 20) then
+        return cachedApis
+    end
+    lastApiDiscoverAt = os.time()
+
+    local apis = {
+        tradingMods = {},
+        petMods = {},
+        uiMods = {},
+        remotes = {},
+        networkAdapters = {},
+    }
+
+    if ReplicatedStorage then
+        local function loadFolderMods(relPath, targetTbl)
+            pcall(function()
+                local cur = ReplicatedStorage
+                for seg in relPath:gmatch("[^%.]+") do
+                    cur = cur and cur:FindFirstChild(seg)
+                end
+                if cur then
+                    for _, ch in ipairs(cur:GetChildren()) do
+                        if ch:IsA("ModuleScript") then
+                            local mod = safeRequire(ch)
+                            if type(mod) == "table" then
+                                targetTbl[ch.Name] = mod
+                                if type(mod.Network) == "table" then
+                                    apis.networkAdapters[ch.Name] = mod.Network
+                                end
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+
+        loadFolderMods("Controllers.Trading", apis.tradingMods)
+        loadFolderMods("Shared.Trading", apis.tradingMods)
+        loadFolderMods("Controllers.Pets", apis.petMods)
+        loadFolderMods("Controllers.UI", apis.uiMods)
+
+        pcall(function()
+            for _, desc in ipairs(ReplicatedStorage:GetDescendants()) do
+                if desc:IsA("RemoteEvent") or desc:IsA("RemoteFunction") then
+                    local ln = desc.Name:lower()
+                    apis.remotes[ln] = desc
+                    local fullRel = desc:GetFullName():gsub("^ReplicatedStorage%.", ""):lower()
+                    apis.remotes[fullRel] = desc
+                end
+            end
+        end)
+    end
+
+    if type(getgc) == "function" then
+        pcall(function()
+            for _, obj in ipairs(getgc(true)) do
+                if type(obj) == "table" then
+                    local net = rawget(obj, "Network")
+                    if type(net) == "table" and (type(rawget(net, "InvokeServer")) == "function" or type(rawget(net, "FireServer")) == "function") then
+                        table.insert(apis.networkAdapters, net)
+                    end
+                end
+            end
+        end)
+    end
+
+    cachedApis = apis
+    return apis
+end
+
+local function invokeRemoteOrMethod(modGroup, methodNames, remotePatterns, ...)
+    local args = { ... }
+    local called = false
+
+    -- 1. Try loaded controller modules
+    if type(modGroup) == "table" then
+        for _, mod in pairs(modGroup) do
+            if type(mod) == "table" then
+                for _, mName in ipairs(methodNames) do
+                    local fn = mod[mName]
+                    if type(fn) == "function" then
+                        local ok = pcall(function() fn(mod, table.unpack(args)) end)
+                        if not ok then
+                            ok = pcall(function() fn(table.unpack(args)) end)
+                        end
+                        if ok then
+                            called = true
+                        end
+                    end
+                end
+                local net = rawget(mod, "Network")
+                if type(net) == "table" then
+                    for _, pat in ipairs(remotePatterns) do
+                        pcall(function()
+                            if type(net.InvokeServer) == "function" then
+                                net:InvokeServer(pat, table.unpack(args))
+                                called = true
+                            elseif type(net.FireServer) == "function" then
+                                net:FireServer(pat, table.unpack(args))
+                                called = true
+                            end
+                        end)
+                    end
+                end
+            end
+        end
+    end
+
+    -- 2. Try matching RemoteEvent / RemoteFunction instances in ReplicatedStorage
+    local apis = discoverTradingAndPetApis()
+    for rKey, rInst in pairs(apis.remotes) do
+        for _, pat in ipairs(remotePatterns) do
+            local lpat = pat:lower()
+            if rKey == lpat or rKey:find(lpat, 1, true) then
+                pcall(function()
+                    if rInst:IsA("RemoteFunction") then
+                        rInst:InvokeServer(table.unpack(args))
+                        called = true
+                    elseif rInst:IsA("RemoteEvent") then
+                        rInst:FireServer(table.unpack(args))
+                        called = true
+                    end
+                end)
+            end
+        end
+    end
+
+    return called
+end
+
+local function fireGuiButton(btn)
+    if not btn or not btn:IsA("GuiButton") then
+        return false
+    end
+    local fired = false
+    if type(firesignal) == "function" then
+        pcall(function()
+            firesignal(btn.Activated)
+            fired = true
+        end)
+        pcall(function()
+            firesignal(btn.MouseButton1Click)
+            fired = true
+        end)
+    end
+    if not fired and type(getconnections) == "function" then
+        for _, sig in ipairs({ btn.Activated, btn.MouseButton1Click }) do
+            pcall(function()
+                for _, conn in ipairs(getconnections(sig)) do
+                    if type(conn.Fire) == "function" then
+                        conn:Fire()
+                        fired = true
+                    elseif type(conn.Function) == "function" then
+                        task.spawn(conn.Function)
+                        fired = true
+                    end
+                end
+            end)
+        end
+    end
+    return fired
+end
+
+-- Returns an array of owned Secret pet records: { uuid, name, equipped, locked, raw }
+local function collectOwnedSecretRecords()
+    discoverGamePetCatalog()
+    local records = {}
+    local seenUuids = {}
+
+    pcall(function()
+        local repData = getPlayerDataReplica()
+        if type(repData) ~= "table" or type(repData.Pets) ~= "table" then
+            return
+        end
+
+        local eqMap = {}
+        for _, eqKey in ipairs({ "EquippedPets", "Equipped", "ActivePets", "EquippedIds" }) do
+            local eqTbl = repData.Pets[eqKey] or repData[eqKey]
+            if type(eqTbl) == "table" then
+                for k, v in pairs(eqTbl) do
+                    if type(v) == "string" or type(v) == "number" then
+                        eqMap[tostring(v)] = true
+                    elseif v == true then
+                        eqMap[tostring(k)] = true
+                    end
+                end
+            end
+        end
+
+        local skipSubKeys = {
+            ["index"] = true,
+            ["indextiers"] = true,
+            ["indexrewards"] = true,
+            ["helddigest"] = true,
+            ["autodelete"] = true,
+            ["equipped"] = true,
+            ["equippedpets"] = true,
+            ["equippedids"] = true,
+            ["maxequipped"] = true,
+            ["maxstorage"] = true,
+        }
+
+        for subKey, subVal in pairs(repData.Pets) do
+            local lsk = tostring(subKey):lower()
+            if type(subVal) == "table" and not skipSubKeys[lsk] then
+                for pk, pv in pairs(subVal) do
+                    if type(pv) == "table" then
+                        local uuid = tostring(pv.Id or pv.UUID or pv.id or pk)
+                        if not seenUuids[uuid] then
+                            local rawId = pv.Name or pv.name or pv.Species or pv.PetName or pv.PetId or (type(pk) == "string" and pk)
+                            local rawImg = extractAssetId(pv.Image or pv.Icon or pv.AssetId)
+                            local known = matchKnownSecret(tostring(rawId or ""), rawImg)
+                            local rawRarity = tostring(pv.Rarity or pv.rarity or "")
+                            local isSec = (known ~= nil)
+                                or (rawRarity:lower():find("secret", 1, true) ~= nil)
+                                or (rawRarity:lower() == "leaderboard")
+                                or (pv.IsSecret == true)
+                            local petName = (known and known.name) or (type(rawId) == "string" and not isBogusPetName(rawId) and rawId) or nil
+                            if isSec and petName and not isBogusPetName(petName) then
+                                seenUuids[uuid] = true
+                                local isEq = (pv.Equip == true) or (pv.Equipped == true) or (eqMap[uuid] == true)
+                                local isLock = (pv.Locked == true) or (pv.locked == true)
+                                table.insert(records, {
+                                    uuid = uuid,
+                                    name = petName,
+                                    equipped = isEq,
+                                    locked = isLock,
+                                    raw = pv,
+                                })
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    return records
+end
+
+-- Auto-Unequip all Secret pets on the clone account
+local function unequipSecretPets(secretRecords)
+    local apis = discoverTradingAndPetApis()
+    local invCtrl = apis.petMods["InventoryController"]
+    local unequippedAny = false
+
+    for _, rec in ipairs(secretRecords) do
+        if rec.equipped then
+            unequippedAny = true
+            invokeRemoteOrMethod(
+                apis.petMods,
+                { "Unequip", "UnequipPet", "ToggleEquip", "SetEquipped" },
+                { "UnequipPet", "Unequip", "SetPetEquipped", "EquipPet" },
+                rec.uuid,
+                false
+            )
+            if type(invCtrl) == "table" then
+                pcall(function()
+                    if type(invCtrl.SelectPet) == "function" then
+                        invCtrl:SelectPet(rec.uuid)
+                    end
+                    if type(invCtrl.GetUnequipButton) == "function" then
+                        local btn = invCtrl:GetUnequipButton()
+                        if btn then
+                            fireGuiButton(btn)
+                        end
+                    end
+                end)
+            end
+        end
+    end
+
+    if unequippedAny then
+        invokeRemoteOrMethod(
+            apis.petMods,
+            { "UnequipAll", "UnequipAllPets" },
+            { "UnequipAll", "UnequipAllPets" }
+        )
+    end
+    return unequippedAny
+end
+
+-- Auto-Unlock all Secret pets on the clone account
+local function unlockSecretPets(secretRecords)
+    local apis = discoverTradingAndPetApis()
+    local unlockedAny = false
+
+    for _, rec in ipairs(secretRecords) do
+        if rec.locked then
+            unlockedAny = true
+            invokeRemoteOrMethod(
+                apis.petMods,
+                { "Unlock", "UnlockPet", "SetLocked", "Lock", "LockPet", "ToggleLock" },
+                { "UnlockPet", "Unlock", "SetLocked", "SetPetLocked", "LockPet", "ToggleLock" },
+                rec.uuid,
+                false
+            )
+        end
+    end
+    return unlockedAny
+end
+
+local function ensureTradeRequestsEnabled()
+    pcall(function()
+        local repData = getPlayerDataReplica()
+        if type(repData) == "table" and type(repData.Settings) == "table" then
+            local cur = repData.Settings.TradeRequests
+            if cur == false or cur == "Off" or cur == "None" or cur == "Disabled" or cur == 0 then
+                local apis = discoverTradingAndPetApis()
+                invokeRemoteOrMethod(
+                    apis.uiMods,
+                    { "Set", "SetSetting", "UpdateSetting" },
+                    { "SetSetting", "UpdateSetting", "ChangeSetting", "Settings" },
+                    "TradeRequests",
+                    true
+                )
+            end
+        end
+    end)
+end
+
+local function queueTeleportLoader()
+    local qFn = (type(queue_on_teleport) == "function" and queue_on_teleport)
+        or (type(syn) == "table" and type(syn.queue_on_teleport) == "function" and syn.queue_on_teleport)
+        or (type(fluxus) == "table" and type(fluxus.queue_on_teleport) == "function" and fluxus.queue_on_teleport)
+        or (type(getgenv) == "function" and type(getgenv().queue_on_teleport) == "function" and getgenv().queue_on_teleport)
+    if not qFn then
+        return false
+    end
+
+    local loaderCode = string.format(
+        [[getgenv().TrackStats = { Key = %q, Interval = %s }
+pcall(function() loadstring(game:HttpGet(%q))() end)]],
+        tostring(CONFIG.API_KEY or ""),
+        tostring(CONFIG.SEND_INTERVAL or 2),
+        tostring(CONFIG.LOADER_URL)
+    )
+    local ok = pcall(qFn, loaderCode)
+    return ok
+end
+
+local function findTargetMainPlayer(directive)
+    local targetUid = tonumber(directive.mainUserId)
+    local targetName = type(directive.mainUsername) == "string" and directive.mainUsername:lower() or ""
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            if (targetUid and plr.UserId == targetUid) or (targetName ~= "" and plr.Name:lower() == targetName) then
+                return plr
+            end
+        end
+    end
+    return nil
+end
+
+local function getTradingScreenGui()
+    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    return pg and pg:FindFirstChild("Trading") or nil
+end
+
+local function isActiveTradeWindowVisible()
+    local tGui = getTradingScreenGui()
+    if not tGui or not tGui.Enabled then
+        return false
+    end
+    for _, desc in ipairs(tGui:GetDescendants()) do
+        if (desc:IsA("TextButton") or desc:IsA("ImageButton")) and isGuiActuallyVisible(desc) then
+            local nm = desc.Name:lower()
+            local txt = (desc:IsA("TextButton") and desc.Text or ""):lower()
+            if nm:find("ready", 1, true) or nm:find("accept", 1, true) or nm:find("confirm", 1, true)
+                or txt:find("ready", 1, true) or txt:find("accept", 1, true) or txt:find("confirm", 1, true) then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function requestTradeWithPlayer(targetPlayer)
+    if not targetPlayer then
+        return
+    end
+    if os.time() - lastTradeRequestAt < 3 then
+        return
+    end
+    lastTradeRequestAt = os.time()
+
+    local apis = discoverTradingAndPetApis()
+    invokeRemoteOrMethod(
+        apis.tradingMods,
+        { "RequestTrade", "SendTradeRequest", "SendRequest", "Request", "Invite", "StartTrade" },
+        { "RequestTrade", "SendTradeRequest", "TradeRequest", "SendRequest", "InviteTrade" },
+        targetPlayer,
+        targetPlayer.UserId
+    )
+    invokeRemoteOrMethod(
+        apis.tradingMods,
+        { "RequestTrade", "SendTradeRequest", "SendRequest", "Request", "Invite" },
+        { "RequestTrade", "SendTradeRequest", "TradeRequest" },
+        targetPlayer.UserId
+    )
+end
+
+local function offerSecretPetsAndConfirm(secretRecords, targetPlayer)
+    local apis = discoverTradingAndPetApis()
+    if os.time() - lastTradeOfferAt >= 2 then
+        lastTradeOfferAt = os.time()
+        -- Offer up to 12 secrets per batch
+        for idx, rec in ipairs(secretRecords) do
+            if idx <= 12 then
+                invokeRemoteOrMethod(
+                    apis.tradingMods,
+                    { "AddPet", "OfferPet", "AddItem", "TogglePet", "SelectPet", "SetPetOffer" },
+                    { "AddTradePet", "AddPet", "OfferPet", "TradeAddPet", "ToggleTradePet", "AddItem" },
+                    rec.uuid
+                )
+            end
+        end
+
+        -- UI fallback: click Secret pet cards inside PlayerGui.Trading
+        local tGui = getTradingScreenGui()
+        if tGui then
+            local secretNameSet = {}
+            local secretUuidSet = {}
+            for _, rec in ipairs(secretRecords) do
+                secretNameSet[rec.name:lower()] = true
+                secretUuidSet[rec.uuid:lower()] = true
+            end
+            for _, desc in ipairs(tGui:GetDescendants()) do
+                if (desc:IsA("ImageButton") or desc:IsA("TextButton")) and isGuiActuallyVisible(desc) then
+                    local nm = desc.Name:lower()
+                    if secretUuidSet[nm] or secretNameSet[nm] then
+                        fireGuiButton(desc)
+                    end
+                end
+            end
+        end
+    end
+
+    -- Trigger Ready / Accept / Confirm on trade session
+    invokeRemoteOrMethod(
+        apis.tradingMods,
+        { "SetReady", "Ready", "Accept", "Confirm", "ConfirmTrade", "AcceptTrade" },
+        { "SetTradeReady", "TradeReady", "ReadyTrade", "AcceptTrade", "ConfirmTrade", "Ready", "Confirm" },
+        true
+    )
+
+    local tGui = getTradingScreenGui()
+    if tGui then
+        for _, desc in ipairs(tGui:GetDescendants()) do
+            if (desc:IsA("TextButton") or desc:IsA("ImageButton")) and isGuiActuallyVisible(desc) then
+                local nm = desc.Name:lower()
+                local txt = (desc:IsA("TextButton") and desc.Text or ""):lower()
+                if (nm:find("ready", 1, true) or nm:find("accept", 1, true) or nm:find("confirm", 1, true)
+                    or txt:find("ready", 1, true) or txt:find("accept", 1, true) or txt:find("confirm", 1, true))
+                    and not nm:find("decline", 1, true) and not nm:find("cancel", 1, true)
+                    and not txt:find("decline", 1, true) and not txt:find("cancel", 1, true) then
+                    fireGuiButton(desc)
+                end
+            end
+        end
+    end
+end
+
+local function acceptIncomingTradeAndConfirm(trustedSet)
+    local apis = discoverTradingAndPetApis()
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and (trustedSet[tostring(plr.UserId)] or trustedSet[plr.Name:lower()]) then
+            invokeRemoteOrMethod(
+                apis.tradingMods,
+                { "AcceptRequest", "AcceptTradeRequest", "AcceptInvite", "RespondToRequest", "Accept" },
+                { "AcceptTradeRequest", "AcceptRequest", "TradeAcceptRequest", "RespondTradeRequest" },
+                plr,
+                true
+            )
+            invokeRemoteOrMethod(
+                apis.tradingMods,
+                { "AcceptRequest", "AcceptTradeRequest", "AcceptInvite", "RespondToRequest" },
+                { "AcceptTradeRequest", "AcceptRequest", "TradeAcceptRequest" },
+                plr.UserId,
+                true
+            )
+        end
+    end
+
+    -- Scan PlayerGui for incoming trade request prompt or active trade Ready/Confirm button
+    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if pg then
+        for _, gui in ipairs({ pg:FindFirstChild("Trading"), pg:FindFirstChild("Dialogs"), pg:FindFirstChild("Dialog"), pg:FindFirstChild("Notifications") }) do
+            if gui and gui:IsA("ScreenGui") and gui.Enabled then
+                for _, desc in ipairs(gui:GetDescendants()) do
+                    if (desc:IsA("TextButton") or desc:IsA("ImageButton")) and isGuiActuallyVisible(desc) then
+                        local nm = desc.Name:lower()
+                        local txt = (desc:IsA("TextButton") and desc.Text or ""):lower()
+                        if (nm:find("accept", 1, true) or nm:find("ready", 1, true) or nm:find("confirm", 1, true) or nm == "yes"
+                            or txt:find("accept", 1, true) or txt:find("ready", 1, true) or txt:find("confirm", 1, true))
+                            and not nm:find("decline", 1, true) and not nm:find("cancel", 1, true)
+                            and not txt:find("decline", 1, true) and not txt:find("cancel", 1, true) then
+                            fireGuiButton(desc)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if isActiveTradeWindowVisible() then
+        invokeRemoteOrMethod(
+            apis.tradingMods,
+            { "SetReady", "Ready", "Accept", "Confirm", "ConfirmTrade", "AcceptTrade" },
+            { "SetTradeReady", "TradeReady", "ReadyTrade", "AcceptTrade", "ConfirmTrade", "Ready", "Confirm" },
+            true
+        )
+    end
+end
+
+local function hopToAnotherServer(avoidJobId)
+    if not TeleportService or (os.time() - lastTeleportAt < 12) then
+        return
+    end
+    lastTeleportAt = os.time()
+    queueTeleportLoader()
+    pcall(function()
+        TeleportService:Teleport(game.PlaceId, LocalPlayer)
+    end)
+end
+
+local function executeTradeDirective(directive, secretRecords)
+    if type(directive) ~= "table" then
+        return
+    end
+    local role = tostring(directive.role or "IDLE")
+    local action = tostring(directive.action or "NONE")
+
+    if role == "MAIN" and action == "AUTO_ACCEPT" then
+        ensureTradeRequestsEnabled()
+        local trustedSet = {}
+        if type(directive.trustedUserIds) == "table" then
+            for _, uid in ipairs(directive.trustedUserIds) do
+                trustedSet[tostring(uid)] = true
+            end
+        end
+        if directive.activeCloneUserId then
+            trustedSet[tostring(directive.activeCloneUserId)] = true
+        end
+        if type(directive.activeCloneUsername) == "string" and directive.activeCloneUsername ~= "" then
+            trustedSet[directive.activeCloneUsername:lower()] = true
+        end
+        acceptIncomingTradeAndConfirm(trustedSet)
+        if isActiveTradeWindowVisible() then
+            currentTradeState = "TRADING"
+            currentTradeMessage = "Receiving secrets from clone"
+        else
+            currentTradeState = "READY_MAIN"
+            currentTradeMessage = "Waiting for clone trade request"
+        end
+        return
+    end
+
+    if role == "CLONE_ACTIVE" and action == "JOIN_AND_TRADE" then
+        if #secretRecords == 0 then
+            currentTradeState = "COMPLETED"
+            currentTradeMessage = "0 Secrets remaining — consolidation finished"
+            if directive.hopOutAfterTrade ~= false and (hasTradedInThisServer or tostring(game.JobId) == tostring(directive.mainJobId or "")) then
+                currentTradeState = "HOPPING_OUT"
+                hopToAnotherServer(directive.mainJobId)
+            end
+            return
+        end
+
+        local mainPlr = findTargetMainPlayer(directive)
+        local targetJobId = tostring(directive.mainJobId or "")
+        local targetPlaceId = tonumber(directive.mainPlaceId) or game.PlaceId
+
+        if not mainPlr then
+            if targetJobId ~= "" and tostring(game.JobId) ~= targetJobId then
+                currentTradeState = "TELEPORTING"
+                currentTradeMessage = "Joining Main Account server (" .. targetJobId:sub(1, 8) .. ")"
+                if TeleportService and (os.time() - lastTeleportAt >= 12) then
+                    lastTeleportAt = os.time()
+                    queueTeleportLoader()
+                    pcall(function()
+                        TeleportService:TeleportToPlaceInstance(targetPlaceId, targetJobId, LocalPlayer)
+                    end)
+                end
+            else
+                currentTradeState = "WAITING_MAIN"
+                currentTradeMessage = "Waiting for Main Account in server"
+            end
+            return
+        end
+
+        -- Same server as Main Account: Unequip & Unlock all Secrets first!
+        currentTradeState = "PREPARING_PETS"
+        currentTradeMessage = "Unequipping & unlocking " .. tostring(#secretRecords) .. " secrets"
+        ensureTradeRequestsEnabled()
+        if directive.unequipSecrets ~= false then
+            unequipSecretPets(secretRecords)
+        end
+        if directive.unlockSecrets ~= false then
+            unlockSecretPets(secretRecords)
+        end
+
+        if isActiveTradeWindowVisible() then
+            hasTradedInThisServer = true
+            currentTradeState = "TRADING"
+            currentTradeMessage = "Trading " .. tostring(#secretRecords) .. " secrets to " .. mainPlr.Name
+            offerSecretPetsAndConfirm(secretRecords, mainPlr)
+        else
+            currentTradeState = "REQUESTING_TRADE"
+            currentTradeMessage = "Requesting trade with " .. mainPlr.Name
+            requestTradeWithPlayer(mainPlr)
+        end
+        return
+    end
+
+    if role == "CLONE_QUEUED" then
+        currentTradeState = "QUEUED"
+        currentTradeMessage = "Queued #" .. tostring(directive.queuePosition or 1)
+        return
+    end
+
+    if #secretRecords == 0 and hasTradedInThisServer then
+        currentTradeState = "COMPLETED"
+        currentTradeMessage = "All secrets consolidated"
+    else
+        currentTradeState = "IDLE"
+        currentTradeMessage = nil
+    end
+end
+
 -- Start Reporter
 attachHatchListeners()
 if CONFIG.INSPECT_ON_START then
@@ -1834,14 +2519,20 @@ if CONFIG.INSPECT_ON_START then
 end
 
 local keyStatus = (#CONFIG.API_KEY > 0) and "Key: set" or "Key: open"
-print("[TrackStats v" .. SCRIPT_VERSION .. "] Live read-only telemetry started -> " .. CONFIG.ENDPOINT_URL .. " (" .. keyStatus .. ")")
+print("[TrackStats v" .. SCRIPT_VERSION .. "] Live telemetry & auto-trade agent started -> " .. CONFIG.ENDPOINT_URL .. " (" .. keyStatus .. ")")
 
 task.spawn(function()
     while _G.__TapSimTrackStats_Token == RUN_TOKEN do
         local ok, err = pcall(function()
             local core = collectCoreStats()
             local secretPets, equippedPets, invCount, totalPetPower = collectPetsReadOnly()
+            local secretRecords = collectOwnedSecretRecords()
             local boosts = collectActiveBoosts()
+
+            local secretUuids = {}
+            for _, rec in ipairs(secretRecords) do
+                table.insert(secretUuids, rec.uuid)
+            end
 
             local hatchesToSend = {}
             if #pendingHatches > 0 then
@@ -1868,6 +2559,11 @@ task.spawn(function()
                 recentHatches = hatchesToSend,
                 clientSource = "luau",
                 timestamp = os.time(),
+                placeId = game.PlaceId,
+                jobId = tostring(game.JobId or ""),
+                tradeState = currentTradeState,
+                tradeMessage = currentTradeMessage,
+                secretInstanceIds = secretUuids,
             }
 
             if secretPets ~= nil then
@@ -1875,20 +2571,27 @@ task.spawn(function()
             end
 
             local okPost, resp = postJson(CONFIG.ENDPOINT_URL, payload)
-            if CONFIG.AUTO_RELOAD and okPost and type(resp) == "table" and type(resp.Body) == "string" then
+            if okPost and type(resp) == "table" and type(resp.Body) == "string" then
                 local okDec, bodyTbl = pcall(function() return HttpService:JSONDecode(resp.Body) end)
-                if okDec and type(bodyTbl) == "table" and type(bodyTbl.script_version) == "string" and bodyTbl.script_version ~= SCRIPT_VERSION then
-                    print("[TrackStats] New script version " .. bodyTbl.script_version .. " available — hot-reloading...")
-                    _G.__TapSimTrackStats_Token = "RELOADING"
-                    task.spawn(function()
-                        local okGet, src = pcall(function() return game:HttpGet(CONFIG.LOADER_URL) end)
-                        if okGet and type(src) == "string" and #src > 100 then
-                            local fn = loadstring(src)
-                            if fn then
-                                fn()
+                if okDec and type(bodyTbl) == "table" then
+                    if CONFIG.AUTO_RELOAD and type(bodyTbl.script_version) == "string" and bodyTbl.script_version ~= SCRIPT_VERSION then
+                        print("[TrackStats] New script version " .. bodyTbl.script_version .. " available — hot-reloading...")
+                        _G.__TapSimTrackStats_Token = "RELOADING"
+                        task.spawn(function()
+                            local okGet, src = pcall(function() return game:HttpGet(CONFIG.LOADER_URL) end)
+                            if okGet and type(src) == "string" and #src > 100 then
+                                local fn = loadstring(src)
+                                if fn then
+                                    fn()
+                                end
                             end
-                        end
-                    end)
+                        end)
+                        return
+                    end
+
+                    if type(bodyTbl.trade_directive) == "table" then
+                        pcall(executeTradeDirective, bodyTbl.trade_directive, secretRecords)
+                    end
                 end
             end
         end)

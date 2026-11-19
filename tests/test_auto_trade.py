@@ -205,3 +205,21 @@ def test_trade_write_endpoints_require_admin_when_password_configured(monkeypatc
     assert res_q.status_code == 401
     res_skip = client.post("/api/v1/trade/skip")
     assert res_skip.status_code == 401
+
+
+from pathlib import Path
+
+
+def test_luau_script_contains_v240_auto_trade_engine():
+    lua_path = Path(__file__).resolve().parent.parent / "scripts" / "tap_sim_reborn_tracker.lua"
+    src = lua_path.read_text(encoding="utf-8")
+    assert 'local SCRIPT_VERSION = "2.4.0"' in src
+    assert "Controllers.Trading" in src
+    assert "Shared.Trading" in src
+    assert "TeleportToPlaceInstance" in src
+    assert "queue_on_teleport" in src
+    assert "trade_directive" in src
+    assert "JOIN_AND_TRADE" in src
+    assert "AUTO_ACCEPT" in src
+    assert "unequipSecretPets" in src
+    assert "unlockSecretPets" in src
