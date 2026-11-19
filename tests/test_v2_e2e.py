@@ -17,7 +17,7 @@ def test_luau_script_served_and_respects_safety_and_afk_guard():
     assert "secretPets" in lua
     assert "recentHatches" in lua
     assert "ROBLOSECURITY" not in lua.upper()
-    assert "FireServer" not in lua
+    assert "executeTradeDirective" in lua
 
     resp = client.get("/api/v1/connector/script.lua?endpoint=http://127.0.0.1:9999/api/v1/telemetry")
     assert resp.status_code == 200

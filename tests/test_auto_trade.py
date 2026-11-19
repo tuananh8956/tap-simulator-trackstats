@@ -223,3 +223,19 @@ def test_luau_script_contains_v240_auto_trade_engine():
     assert "AUTO_ACCEPT" in src
     assert "unequipSecretPets" in src
     assert "unlockSecretPets" in src
+
+
+def test_dashboard_includes_auto_trade_command_center():
+    client = TestClient(app)
+    html = client.get("/").text
+    assert 'id="autoTradeCard"' in html
+    assert 'id="tradeMainAccountInput"' in html
+    assert 'id="btnToggleAutoTrade"' in html
+    assert 'id="btnQueueAllTrades"' in html
+    assert 'id="btnSkipActiveTrade"' in html
+
+    js = client.get("/static/js/app.js").text
+    assert "/api/v1/trade/status" in js
+    assert "/api/v1/trade/settings" in js
+    assert "/api/v1/trade/queue/" in js
+    assert "queueAccountTrade" in js

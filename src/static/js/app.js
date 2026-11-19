@@ -11,6 +11,7 @@ let hatchesHydrated = false;
 let lastSecretsFingerprint = "";
 let authState = { auth_enabled: false, public_read: true, is_admin: true, ingest_key_required: false };
 let connectorConfig = null;
+let tradeStatusState = null;
 let eventSource = null;
 
 // --- XSS & URL Sanitization Helpers ---
@@ -109,6 +110,7 @@ async function loadDashboardData() {
     loadAccounts(),
     loadSecretsVault(),
     loadPetCatalog(),
+    loadTradeStatus(),
   ]);
   connectSSE();
 }
@@ -535,6 +537,159 @@ async function openSecretDetailModal(slug, petKey = "") {
 
 // --- Multi-Account Matrix ---
 
+async function loadTradeStatus() {
+  try {
+    const st = await apiFetch("/api/v1/trade/status");
+    renderTradeStatus(st);
+  } catch (_) {}
+}
+
+function renderTradeStatus(st) {
+  if (!st) return;
+  tradeStatusState = st;
+  const cfg = st.settings || {};
+  const enabled = Boolean(cfg.enabled);
+
+  const badge = document.getElementById("autoTradeModeBadge");
+  const modeText = document.getElementById("autoTradeModeText");
+  const toggleBtn = document.getElementById("btnToggleAutoTrade");
+  const toggleText = document.getElementById("btnToggleAutoTradeText");
+
+  if (badge && modeText) {
+    badge.className = `status-badge ${enabled ? "live" : "idle"}`;
+    modeText.textContent = enabled ? "AUTO ON" : "OFF";
+  }
+  if (toggleBtn && toggleText) {
+    toggleText.textContent = enabled ? "Tắt Auto-Gom Secret" : "Bật Auto-Gom Secret";
+    toggleBtn.className = enabled ? "btn btn-danger-ghost btn-sm" : "btn btn-primary btn-sm";
+  }
+
+  const inputEl = document.getElementById("tradeMainAccountInput");
+  if (inputEl && document.activeElement !== inputEl) {
+    inputEl.value = st.main_username || (st.main_user_id ? String(st.main_user_id) : "");
+  }
+
+  const selectEl = document.getElementById("tradeMainAccountSelect");
+  if (selectEl && document.activeElement !== selectEl) {
+    const curOptions = (accountsList || [])
+      .map(
+        (a) =>
+          `<option value="${escapeHtml(a.username)}" ${
+            (st.main_user_id && Number(a.user_id) === Number(st.main_user_id)) ||
+            (st.main_username && String(a.username).toLowerCase() === String(st.main_username).toLowerCase())
+              ? "selected"
+              : ""
+          }>@${escapeHtml(a.username)} (${formatNumber(a.secret_count || 0)} Secrets)</option>`
+      )
+      .join("");
+    selectEl.innerHTML = `<option value="">-- Chọn từ danh sách --</option>${curOptions}`;
+  }
+
+  const chkUnequip = document.getElementById("chkTradeUnequip");
+  const chkUnlock = document.getElementById("chkTradeUnlock");
+  const chkHop = document.getElementById("chkTradeHopOut");
+  if (chkUnequip) chkUnequip.checked = cfg.unequipSecrets !== false;
+  if (chkUnlock) chkUnlock.checked = cfg.unlockSecrets !== false;
+  if (chkHop) chkHop.checked = cfg.hopOutAfterTrade !== false;
+
+  const summaryEl = document.getElementById("autoTradeStatusSummary");
+  const pillsEl = document.getElementById("autoTradeQueuePills");
+  if (summaryEl) {
+    if (!st.main_user_id && !st.main_username) {
+      summaryEl.innerHTML = `Chưa cấu hình <strong>Acc Chính</strong>. Hãy chọn hoặc nhập Username Acc Chính rồi bấm <strong>Lưu Acc Chính</strong>.`;
+    } else {
+      const mainLabel = st.main_username ? `@${escapeHtml(st.main_username)}` : `ID ${Number(st.main_user_id)}`;
+      const srvBadge = st.main_ready
+        ? `<span class="variant-badge vb-normal" style="background:rgba(16,185,129,0.18);color:#34d399;">ONLINE • Server ${escapeHtml(String(st.main_job_id || "").slice(0, 8))}</span>`
+        : `<span class="variant-badge vb-golden">Đang chờ Acc Chính vào game (chạy chung script)...</span>`;
+      const activeText = st.active_clone_id
+        ? ` &bull; Đang giao dịch: <strong class="highlight-secret">@${escapeHtml(st.active_clone_username || String(st.active_clone_id))}</strong> (${formatNumber(st.active_clone_secrets || 0)} Secrets • <code>${escapeHtml(st.active_clone_state || "ACTIVE")}</code>)`
+        : "";
+      summaryEl.innerHTML = `Acc Chính: <strong>${mainLabel}</strong> ${srvBadge} &bull; Hàng đợi: <strong>${formatNumber(st.queue_count || 0)} clone</strong> (<strong>${formatNumber(st.total_pending_secrets || 0)} Secrets</strong> chờ gom)${activeText}`;
+    }
+  }
+
+  if (pillsEl) {
+    const q = Array.isArray(st.queue) ? st.queue.slice(0, 6) : [];
+    pillsEl.innerHTML = q
+      .map(
+        (item) =>
+          `<span class="owner-chip" style="${item.is_active ? "border-color:var(--cyan-glow);color:var(--cyan-glow);" : ""}">` +
+          `#${Number(item.position)} @${escapeHtml(item.username)} (${formatNumber(item.secret_count)})` +
+          `</span>`
+      )
+      .join("");
+  }
+}
+
+async function saveTradeSettings(overrides = {}) {
+  const inputVal = (document.getElementById("tradeMainAccountInput")?.value || "").trim().replace(/^@/, "");
+  const selectVal = (document.getElementById("tradeMainAccountSelect")?.value || "").trim();
+  const chosen = overrides.mainUsername !== undefined ? overrides.mainUsername : inputVal || selectVal;
+
+  const payload = {
+    unequipSecrets: Boolean(document.getElementById("chkTradeUnequip")?.checked ?? true),
+    unlockSecrets: Boolean(document.getElementById("chkTradeUnlock")?.checked ?? true),
+    hopOutAfterTrade: Boolean(document.getElementById("chkTradeHopOut")?.checked ?? true),
+    ...overrides,
+  };
+
+  if (chosen !== undefined) {
+    if (/^\d+$/.test(String(chosen))) {
+      payload.mainUserId = Number(chosen);
+    } else {
+      payload.mainUsername = String(chosen);
+    }
+  }
+
+  try {
+    const st = await apiFetch("/api/v1/trade/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    renderTradeStatus(st);
+    renderMultiAccountsTable(accountsList);
+    showToast("Đã cập nhật cấu hình Auto-Trade Gom Secret!");
+  } catch (err) {
+    showToast("Lỗi lưu cấu hình Auto-Trade: " + err.message, "error");
+  }
+}
+
+async function queueAccountTrade(userId) {
+  try {
+    const st = await apiFetch(`/api/v1/trade/queue/${Number(userId)}`, { method: "POST" });
+    renderTradeStatus(st);
+    renderMultiAccountsTable(accountsList);
+    showToast(`Đã đưa acc ${userId} lên đầu hàng đợi gom Secret!`);
+  } catch (err) {
+    showToast("Không thể xếp hàng trade: " + err.message, "error");
+  }
+}
+
+async function queueAllClonesTrade() {
+  try {
+    await saveTradeSettings({ enabled: true });
+    const st = await apiFetch("/api/v1/trade/queue-all", { method: "POST" });
+    renderTradeStatus(st);
+    renderMultiAccountsTable(accountsList);
+    showToast(`Đã xếp hàng ${st.queue_count || 0} acc clone để gom toàn bộ Secret về Acc Chính!`);
+  } catch (err) {
+    showToast("Lỗi xếp hàng tất cả: " + err.message, "error");
+  }
+}
+
+async function skipActiveTrade() {
+  try {
+    const st = await apiFetch("/api/v1/trade/skip", { method: "POST" });
+    renderTradeStatus(st);
+    renderMultiAccountsTable(accountsList);
+    showToast("Đã bỏ qua acc hiện tại và chuyển sang acc kế tiếp!");
+  } catch (err) {
+    showToast("Lỗi skip: " + err.message, "error");
+  }
+}
+
 function renderMultiAccountsTable(accounts) {
   const tbody = document.getElementById("multiAccountsTableBody");
   if (!tbody) return;
@@ -578,13 +733,29 @@ function renderMultiAccountsTable(accounts) {
               .join("")
           : `<span style="color:var(--text-dim);font-size:0.78rem;">0 Secrets</span>`;
 
+      const isMainAcc =
+        tradeStatusState &&
+        ((tradeStatusState.main_user_id && Number(a.user_id) === Number(tradeStatusState.main_user_id)) ||
+          (tradeStatusState.main_username &&
+            String(a.username || "").toLowerCase() === String(tradeStatusState.main_username).toLowerCase()));
+      const isActiveClone = tradeStatusState && Number(tradeStatusState.active_clone_id) === Number(a.user_id);
+      const tState = String(a.trade_state || "IDLE").toUpperCase();
+      const tradeBadge = isMainAcc
+        ? `<span class="mini-pill" style="background:rgba(0,242,254,0.18);color:var(--cyan-glow);">ACC CHÍNH</span>`
+        : isActiveClone || (tState !== "IDLE" && tState !== "NONE")
+        ? `<span class="mini-pill">${escapeHtml(tState)}</span>`
+        : "";
+
       return `
         <tr>
           <td>
             <div style="display:flex; align-items:center; gap:9px;">
               <img src="${escapeHtml(avatar)}" style="width:30px;height:30px;border-radius:50%;background:#1e293b;object-fit:cover;" alt="" />
               <div>
-                <div style="font-weight:700;color:var(--text-main);">@${escapeHtml(a.username)}</div>
+                <div style="font-weight:700;color:var(--text-main);display:flex;align-items:center;gap:6px;">
+                  <span>@${escapeHtml(a.username)}</span>
+                  ${tradeBadge}
+                </div>
                 <div style="font-size:0.72rem;color:var(--text-dim);">ID: ${Number(a.user_id)}</div>
               </div>
             </div>
@@ -603,7 +774,19 @@ function renderMultiAccountsTable(accounts) {
           </td>
           <td class="mono">${formatCompact(a.current_rebirths || 0)}</td>
           <td>
-            <button class="btn btn-danger-ghost btn-sm" data-action="delete" data-uid="${Number(a.user_id)}">Delete</button>
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+              ${
+                !isMainAcc && (a.secret_count || 0) > 0
+                  ? `<button class="btn btn-primary btn-sm" data-action="trade" data-uid="${Number(a.user_id)}" title="Gom Secret từ acc này về Acc Chính">Gom Secret</button>`
+                  : ""
+              }
+              ${
+                !isMainAcc
+                  ? `<button class="btn btn-secondary btn-sm" data-action="set-main" data-uid="${Number(a.user_id)}" data-uname="${escapeHtml(a.username)}" title="Đặt làm Acc Chính nhận Secret">Đặt Acc Chính</button>`
+                  : ""
+              }
+              <button class="btn btn-danger-ghost btn-sm" data-action="delete" data-uid="${Number(a.user_id)}">Delete</button>
+            </div>
           </td>
         </tr>`;
     })
@@ -624,6 +807,9 @@ function connectSSE() {
 
       if (!Array.isArray(payload) && payload.overview) {
         renderOverview(payload.overview);
+      }
+      if (!Array.isArray(payload) && payload.trade_status) {
+        renderTradeStatus(payload.trade_status);
       }
 
       renderAccountFilterDropdown(accounts);
@@ -785,12 +971,36 @@ function setupEventListeners() {
   document.getElementById("accountSearchInput")?.addEventListener("input", () => renderMultiAccountsTable(accountsList));
   document.getElementById("accountStatusFilter")?.addEventListener("change", () => renderMultiAccountsTable(accountsList));
 
+  // Auto-Trade Command Center controls
+  document.getElementById("tradeMainAccountSelect")?.addEventListener("change", (e) => {
+    const val = e.target.value;
+    const inp = document.getElementById("tradeMainAccountInput");
+    if (inp && val) inp.value = val;
+  });
+  document.getElementById("btnSaveMainAccount")?.addEventListener("click", () => saveTradeSettings());
+  document.getElementById("btnToggleAutoTrade")?.addEventListener("click", () => {
+    const curEnabled = Boolean(tradeStatusState?.settings?.enabled);
+    saveTradeSettings({ enabled: !curEnabled });
+  });
+  document.getElementById("btnQueueAllTrades")?.addEventListener("click", () => queueAllClonesTrade());
+  document.getElementById("btnSkipActiveTrade")?.addEventListener("click", () => skipActiveTrade());
+  document.getElementById("chkTradeUnequip")?.addEventListener("change", () => saveTradeSettings());
+  document.getElementById("chkTradeUnlock")?.addEventListener("change", () => saveTradeSettings());
+  document.getElementById("chkTradeHopOut")?.addEventListener("change", () => saveTradeSettings());
+
   document.getElementById("multiAccountsTableBody")?.addEventListener("click", async (e) => {
     const btn = e.target.closest("button[data-action]");
     if (!btn) return;
     const uid = Number(btn.dataset.uid);
     if (btn.dataset.action === "delete") {
       await deleteAccount(uid);
+    } else if (btn.dataset.action === "trade") {
+      await queueAccountTrade(uid);
+    } else if (btn.dataset.action === "set-main") {
+      const uname = btn.dataset.uname || "";
+      const inp = document.getElementById("tradeMainAccountInput");
+      if (inp) inp.value = uname || String(uid);
+      await saveTradeSettings({ mainUserId: uid, mainUsername: uname });
     }
   });
 
