@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <radialGradient id="gBg" cx="50%" cy="45%" r="62%">
+      <stop offset="0%" stop-color="#10b981" stop-opacity="0.42"/>
+      <stop offset="100%" stop-color="#041c1a"/>
+    </radialGradient>
+    <linearGradient id="gAqua" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#5eead4"/>
+      <stop offset="50%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#0e7490"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="22" fill="url(#gBg)"/>
+  <polygon points="64,14 78,36 64,46 50,36" fill="#67e8f9" opacity="0.9"/>
+  <path d="M32 62 Q32 34 64 34 Q96 34 96 62 Q96 96 64 106 Q32 96 32 62 Z" fill="url(#gAqua)" stroke="#a7f3d0" stroke-width="1.5" stroke-opacity="0.55"/>
+  <circle cx="50" cy="64" r="7" fill="#042f2e"/>
+  <circle cx="78" cy="64" r="7" fill="#042f2e"/>
+  <circle cx="51" cy="63" r="3" fill="#67e8f9"/>
+  <circle cx="79" cy="63" r="3" fill="#67e8f9"/>
+  <path d="M54 80 Q64 87 74 80" fill="none" stroke="#ecfeff" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="24" cy="48" r="4" fill="#34d399" opacity="0.7"/>
+  <circle cx="104" cy="54" r="3.5" fill="#22d3ee" opacity="0.75"/>
+</svg>

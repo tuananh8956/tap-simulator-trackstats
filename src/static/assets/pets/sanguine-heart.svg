@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <radialGradient id="gBg" cx="50%" cy="48%" r="64%">
+      <stop offset="0%" stop-color="#f43f5e" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#17040b"/>
+    </radialGradient>
+    <linearGradient id="gRuby" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#fda4af"/>
+      <stop offset="45%" stop-color="#e11d48"/>
+      <stop offset="100%" stop-color="#881337"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="22" fill="url(#gBg)"/>
+  <circle cx="64" cy="64" r="46" fill="none" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4 6" opacity="0.55"/>
+  <path d="M64 104 L26 64 C16 48 26 26 44 26 C54 26 60 32 64 40 C68 32 74 26 84 26 C102 26 112 48 102 64 Z" fill="url(#gRuby)" stroke="#fecdd3" stroke-width="2" stroke-opacity="0.7"/>
+  <polygon points="64,46 80,62 64,90 48,62" fill="#fff1f2" opacity="0.22"/>
+  <circle cx="52" cy="58" r="5" fill="#1f0510"/>
+  <circle cx="76" cy="58" r="5" fill="#1f0510"/>
+  <circle cx="53" cy="57" r="2" fill="#fda4af"/>
+  <circle cx="77" cy="57" r="2" fill="#fda4af"/>
+  <path d="M56 72 Q64 78 72 72" fill="none" stroke="#fff1f2" stroke-width="2.4" stroke-linecap="round"/>
+</svg>

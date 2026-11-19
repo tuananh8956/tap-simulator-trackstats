@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <radialGradient id="gBg" cx="50%" cy="45%" r="62%">
+      <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.42"/>
+      <stop offset="100%" stop-color="#070a17"/>
+    </radialGradient>
+    <linearGradient id="gBlade" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#67e8f9"/>
+      <stop offset="100%" stop-color="#3b82f6"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="22" fill="url(#gBg)"/>
+  <path d="M96 16 Q116 32 106 60 Q94 42 78 36 Z" fill="url(#gBlade)"/>
+  <line x1="88" y1="30" x2="36" y2="108" stroke="#94a3b8" stroke-width="4" stroke-linecap="round"/>
+  <path d="M32 54 Q32 24 64 24 Q96 24 96 54 Q96 92 64 98 Q32 92 32 54 Z" fill="#1e293b" stroke="#67e8f9" stroke-width="2" stroke-opacity="0.65"/>
+  <path d="M40 54 Q40 34 64 34 Q88 34 88 54 Q88 84 64 88 Q40 84 40 54 Z" fill="#f1f5f9"/>
+  <polygon points="46,56 58,60 48,66" fill="#0f172a"/>
+  <polygon points="82,56 70,60 80,66" fill="#0f172a"/>
+  <circle cx="52" cy="60" r="2.2" fill="#22d3ee"/>
+  <circle cx="76" cy="60" r="2.2" fill="#22d3ee"/>
+  <path d="M52 76 L56 80 L60 76 L64 80 L68 76 L72 80 L76 76" fill="none" stroke="#0f172a" stroke-width="2.4"/>
+</svg>
