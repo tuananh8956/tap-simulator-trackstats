@@ -13,12 +13,16 @@
 ===============================================================================
 ]]
 
+local SCRIPT_VERSION = "2.2.0"
+
 local CONFIG = {
     ENDPOINT_URL = "http://127.0.0.1:3883/api/v1/telemetry",
     INSPECT_URL = "http://127.0.0.1:3883/api/v1/connector/inspect",
+    LOADER_URL = "http://127.0.0.1:3883/loader.lua",
     API_KEY = "",
     SEND_INTERVAL = 2.0,
     INSPECT_ON_START = true,
+    AUTO_RELOAD = true,
     DEBUG_LOG = false,
 
     -- Optional explicit dot-path overrides (populate using the Dashboard Connector Inspector tab
@@ -78,6 +82,7 @@ end
 
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
+local ReplicatedStorage = pcall(function() return game:GetService("ReplicatedStorage") end) and game:GetService("ReplicatedStorage") or nil
 local TextChatService = pcall(function() return game:GetService("TextChatService") end) and game:GetService("TextChatService") or nil
 
 local LocalPlayer = Players.LocalPlayer
@@ -479,154 +484,710 @@ local function collectCoreStats()
     return stats
 end
 
--- Finds candidate Pet Inventory ScrollingFrame/Container in PlayerGui
-local function findPetContainer()
-    if CONFIG.PATHS.PetListGui then
-        return resolvePath(CONFIG.PATHS.PetListGui)
+-- Bogus UI words that must NEVER be treated as Secret pet names
+local BOGUS_PET_NAMES = {
+    [""] = true,
+    ["yet"] = true,
+    ["unknown"] = true,
+    ["unknown secret"] = true,
+    ["unknown pet"] = true,
+    ["secret"] = true,
+    ["secrets"] = true,
+    ["secret pet"] = true,
+    ["secret pets"] = true,
+    ["secret pool"] = true,
+    ["secret skip"] = true,
+    ["secret luck"] = true,
+    ["skip"] = true,
+    ["luck"] = true,
+    ["none"] = true,
+    ["null"] = true,
+    ["nil"] = true,
+    ["auto"] = true,
+    ["default"] = true,
+    ["template"] = true,
+    ["sample"] = true,
+    ["placeholder"] = true,
+    ["empty"] = true,
+    ["hatched"] = true,
+}
+
+local function normalizeLookupKey(str)
+    if type(str) ~= "string" then
+        return ""
     end
-    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    if not pg then
+    return str:lower():gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function compactKey(str)
+    if type(str) ~= "string" then
+        return ""
+    end
+    return str:lower():gsub("[^a-z0-9]", "")
+end
+
+local function isBogusPetName(raw)
+    if type(raw) ~= "string" then
+        return true
+    end
+    local clean = normalizeLookupKey(raw)
+    if clean == "" or #clean <= 2 or BOGUS_PET_NAMES[clean] then
+        return true
+    end
+    if clean:find("haven't hatched", 1, true)
+        or clean:find("havent hatched", 1, true)
+        or clean:find("no secret", 1, true)
+        or clean:match("%s+yet!?$") then
+        return true
+    end
+    return false
+end
+
+-- Dynamic Game Pet Database & AssetId->Pet map (populated from KNOWN_SECRETS + ReplicatedStorage + SpriteHolder + getgc)
+local GAME_PET_DB = {}
+local COMPACT_SECRETS = {}
+local ASSET_TO_SECRET = {}
+
+local function registerKnownPet(keyOrName, info)
+    if type(keyOrName) ~= "string" or type(info) ~= "table" or not info.name then
+        return
+    end
+    local lk = normalizeLookupKey(keyOrName)
+    local ck = compactKey(keyOrName)
+    if lk ~= "" and not BOGUS_PET_NAMES[lk] then
+        GAME_PET_DB[lk] = info
+    end
+    if ck ~= "" and not BOGUS_PET_NAMES[ck] then
+        COMPACT_SECRETS[ck] = info
+    end
+    if info.imageAssetId then
+        ASSET_TO_SECRET[tostring(info.imageAssetId)] = info
+    end
+end
+
+for k, info in pairs(KNOWN_SECRETS) do
+    registerKnownPet(k, info)
+    registerKnownPet(info.name, info)
+end
+
+local STRIP_VARIANT_WORDS = { "golden ", "gold ", "rainbow ", "diamond ", "shiny ", "normal ", "secret " }
+
+local function matchKnownSecret(rawText, assetId)
+    if assetId and ASSET_TO_SECRET[tostring(assetId)] then
+        return ASSET_TO_SECRET[tostring(assetId)]
+    end
+    if type(rawText) ~= "string" or rawText == "" then
         return nil
     end
-    for _, gui in ipairs(pg:GetChildren()) do
-        if gui:IsA("ScreenGui") and gui.Enabled then
-            local gName = gui.Name:lower()
-            for _, desc in ipairs(gui:GetDescendants()) do
-                if desc:IsA("ScrollingFrame") and isGuiActuallyVisible(desc) then
-                    local dName = desc.Name:lower()
-                    local pName = desc.Parent and desc.Parent.Name:lower() or ""
-                    if gName:find("pet", 1, true) or dName:find("pet", 1, true) or pName:find("pet", 1, true) or dName:find("inventory", 1, true) then
-                        if #desc:GetChildren() > 0 then
-                            return desc
+    local lower = normalizeLookupKey(rawText)
+    if GAME_PET_DB[lower] then
+        return GAME_PET_DB[lower]
+    end
+    local ck = compactKey(rawText)
+    if COMPACT_SECRETS[ck] then
+        return COMPACT_SECRETS[ck]
+    end
+    -- Strip leading variant prefixes like "Golden Dark Cat" or "[Secret] Dark Cat"
+    local stripped = lower:gsub("^%[[^%]]+%]%s*", ""):gsub("^%([^%)]+%)%s*", "")
+    for _, pref in ipairs(STRIP_VARIANT_WORDS) do
+        if stripped:sub(1, #pref) == pref then
+            stripped = stripped:sub(#pref + 1)
+        end
+    end
+    if GAME_PET_DB[stripped] then
+        return GAME_PET_DB[stripped]
+    end
+    local sck = compactKey(stripped)
+    if COMPACT_SECRETS[sck] then
+        return COMPACT_SECRETS[sck]
+    end
+    -- Substring search for longest matching known secret key
+    local bestMatch = nil
+    local bestLen = 0
+    for key, info in pairs(KNOWN_SECRETS) do
+        if #key > bestLen and lower:find(key, 1, true) then
+            bestMatch = info
+            bestLen = #key
+        end
+    end
+    return bestMatch
+end
+
+local lastCatalogScanAt = 0
+
+local function discoverGamePetCatalog()
+    if os.time() - lastCatalogScanAt < 30 then
+        return
+    end
+    lastCatalogScanAt = os.time()
+
+    -- 1. Scan ReplicatedStorage folders/models/attributes for pet definitions
+    if ReplicatedStorage then
+        pcall(function()
+            for _, desc in ipairs(ReplicatedStorage:GetDescendants()) do
+                if desc:IsA("Folder") or desc:IsA("Model") or desc:IsA("Configuration") then
+                    local okA, attrs = pcall(function() return desc:GetAttributes() end)
+                    if okA and type(attrs) == "table" then
+                        local rarity = tostring(attrs.Rarity or attrs.rarity or attrs.Tier or attrs.tier or "")
+                        local img = extractAssetId(attrs.Image or attrs.image or attrs.Icon or attrs.icon or attrs.AssetId)
+                        local mult = parseFloatCompact(attrs.Multiplier or attrs.multiplier or attrs.Power or attrs.power)
+                        local known = matchKnownSecret(desc.Name, img)
+                        if known or rarity:lower():find("secret", 1, true) then
+                            local info = {
+                                name = (known and known.name) or tostring(attrs.DisplayName or attrs.Name or desc.Name),
+                                tier = (known and known.tier) or (rarity ~= "" and rarity) or "Secret",
+                                egg = (known and known.egg) or attrs.Egg or attrs.egg,
+                                imageAssetId = img or (known and known.imageAssetId),
+                                multiplier = (mult and mult > 1) and mult or (known and known.multiplier),
+                            }
+                            registerKnownPet(desc.Name, info)
+                            registerKnownPet(info.name, info)
                         end
                     end
                 end
             end
-        end
+        end)
     end
-    return nil
+
+    -- 2. Scan PlayerGui.SpriteHolder for preloaded pet icons
+    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    local spriteHolder = pg and pg:FindFirstChild("SpriteHolder")
+    if spriteHolder then
+        pcall(function()
+            for _, desc in ipairs(spriteHolder:GetDescendants()) do
+                if (desc:IsA("ImageLabel") or desc:IsA("ImageButton")) and desc.Image ~= "" then
+                    local assetId = extractAssetId(desc.Image)
+                    local candidateName = (desc.Name ~= "Icon" and desc.Name ~= "Image") and desc.Name
+                        or (desc.Parent and desc.Parent.Name) or ""
+                    local known = matchKnownSecret(candidateName, assetId)
+                    if known and assetId then
+                        known.imageAssetId = known.imageAssetId or assetId
+                        registerKnownPet(candidateName, known)
+                    end
+                end
+            end
+        end)
+    end
+
+    -- 3. Scan getgc(true) for static Pet Catalog definition tables
+    if type(getgc) == "function" then
+        pcall(function()
+            local objs = getgc(true)
+            local scanned = 0
+            for _, tbl in ipairs(objs) do
+                if type(tbl) == "table" then
+                    scanned = scanned + 1
+                    if scanned > 15000 then
+                        break
+                    end
+                    local okIter, _ = pcall(function()
+                        for k, v in pairs(tbl) do
+                            if type(v) == "table" then
+                                local rawName = rawget(v, "Name") or rawget(v, "name") or rawget(v, "DisplayName") or rawget(v, "displayName") or (type(k) == "string" and k)
+                                local rawRarity = tostring(rawget(v, "Rarity") or rawget(v, "rarity") or rawget(v, "Tier") or rawget(v, "tier") or "")
+                                local rawImg = extractAssetId(rawget(v, "Image") or rawget(v, "image") or rawget(v, "Icon") or rawget(v, "icon") or rawget(v, "Thumbnail") or rawget(v, "AssetId"))
+                                local known = (type(rawName) == "string" and matchKnownSecret(rawName, rawImg)) or (type(k) == "string" and matchKnownSecret(k, rawImg))
+                                if known or rawRarity:lower():find("secret", 1, true) then
+                                    local finalName = (known and known.name) or (type(rawName) == "string" and not isBogusPetName(rawName) and rawName) or nil
+                                    if finalName then
+                                        local mult = parseFloatCompact(rawget(v, "Multiplier") or rawget(v, "multiplier") or rawget(v, "Power") or rawget(v, "power"))
+                                        local info = {
+                                            name = finalName,
+                                            tier = detectTier(rawRarity) or (known and known.tier) or "Secret",
+                                            egg = rawget(v, "Egg") or rawget(v, "egg") or (known and known.egg),
+                                            imageAssetId = rawImg or (known and known.imageAssetId),
+                                            multiplier = (mult and mult > 1) and mult or (known and known.multiplier),
+                                        }
+                                        registerKnownPet(finalName, info)
+                                        if type(k) == "string" then
+                                            registerKnownPet(k, info)
+                                        end
+                                        local rawId = rawget(v, "Id") or rawget(v, "id")
+                                        if type(rawId) == "string" then
+                                            registerKnownPet(rawId, info)
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end)
+                end
+            end
+        end)
+    end
 end
 
--- Collects pets ONLY when the inventory UI is visibly open (AFK Closed-Inventory Guard!)
--- Returns: (secretPetsOrNil, equippedPets, totalInvCount, totalPetPower)
-local function collectPetsReadOnly()
-    local container = findPetContainer()
-    if not container or not isGuiActuallyVisible(container) then
-        -- AFK Closed-Inventory Guard: return nil for secretPets so backend preserves Vault!
+-- Helper to detect Variant from a Lua pet instance table
+local function detectVariantFromTable(petTbl, fallbackStr)
+    if type(petTbl) == "table" then
+        local explicit = rawget(petTbl, "Variant") or rawget(petTbl, "variant") or rawget(petTbl, "Mutation") or rawget(petTbl, "Evolution") or rawget(petTbl, "Type")
+        local isShiny = (rawget(petTbl, "Shiny") == true) or (rawget(petTbl, "shiny") == true) or (rawget(petTbl, "IsShiny") == true)
+        local isRainbow = (rawget(petTbl, "Rainbow") == true) or (rawget(petTbl, "rainbow") == true)
+        local isGolden = (rawget(petTbl, "Golden") == true) or (rawget(petTbl, "golden") == true) or (rawget(petTbl, "Gold") == true)
+        local isDiamond = (rawget(petTbl, "Diamond") == true) or (rawget(petTbl, "diamond") == true)
+        local tierNum = tonumber(rawget(petTbl, "Tier") or rawget(petTbl, "tier") or rawget(petTbl, "Grade") or rawget(petTbl, "Evo"))
+        if isRainbow or tierNum == 3 then
+            return isShiny and "Rainbow Shiny" or "Rainbow"
+        elseif isDiamond or tierNum == 4 then
+            return isShiny and "Diamond Shiny" or "Diamond"
+        elseif isGolden or tierNum == 2 then
+            return isShiny and "Golden Shiny" or "Golden"
+        elseif type(explicit) == "string" and explicit ~= "" then
+            return detectVariant(explicit .. (isShiny and " Shiny" or ""))
+        elseif isShiny then
+            return "Shiny"
+        end
+    end
+    return detectVariant(fallbackStr or "")
+end
+
+-- Strategy 1: Read player's owned Pet Inventory directly from client memory (getgc) even when Pet UI is closed!
+local function collectPetsFromGc()
+    if type(getgc) ~= "function" then
         return nil, {}, 0, 0
     end
-
-    local secretPets = {}
-    local equippedPets = {}
+    local foundInventoryTable = false
+    local aggregatedSecrets = {}
+    local equippedList = {}
     local invCount = 0
     local totalPower = 0
 
-    for _, card in ipairs(container:GetChildren()) do
-        if card:IsA("GuiObject") and card.Visible and not card:IsA("UILayout") then
-            invCount = invCount + 1
-            local labels = {}
-            local assetId = nil
-            local isEquipped = false
-
-            for _, desc in ipairs(card:GetDescendants()) do
-                if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text and desc.Text ~= "" then
-                    table.insert(labels, desc.Text)
-                elseif (desc:IsA("ImageLabel") or desc:IsA("ImageButton")) and desc.Image and desc.Image ~= "" then
-                    local extracted = extractAssetId(desc.Image)
-                    if extracted and not assetId then
-                        assetId = extracted
-                    end
-                    local nm = desc.Name:lower()
-                    if (nm:find("equip", 1, true) or nm:find("check", 1, true)) and desc.Visible then
-                        isEquipped = true
-                    end
-                end
-            end
-
-            local joined = table.concat(labels, " | ")
-            local lowerJoined = joined:lower()
-            local matchedKnown = nil
-            for key, info in pairs(KNOWN_SECRETS) do
-                if lowerJoined:find(key, 1, true) then
-                    matchedKnown = info
+    pcall(function()
+        local objs = getgc(true)
+        local scanned = 0
+        for _, tbl in ipairs(objs) do
+            if type(tbl) == "table" then
+                scanned = scanned + 1
+                if scanned > 18000 then
                     break
                 end
-            end
-
-            local isSecret = (matchedKnown ~= nil) or (lowerJoined:find("secret", 1, true) ~= nil)
-            local petName = matchedKnown and matchedKnown.name or (labels[1] or card.Name)
-            local variant = detectVariant(joined .. " " .. card.Name)
-            local tier = detectTier(joined) or (matchedKnown and matchedKnown.tier) or (isSecret and "Secret" or nil)
-
-            local mult = 1.0
-            local multLabelIdx = nil
-            local count = 1
-
-            -- Pass 1: Identify multiplier label (supports both "x25,000" and "25,000x")
-            for idx, txt in ipairs(labels) do
-                local trimmed = txt:gsub("^%s+", ""):gsub("%s+$", "")
-                local mPrefix = trimmed:match("^[xX]%s*([%d%.,]+[a-zA-Z]*)$")
-                local mSuffix = trimmed:match("^([%d%.,]+[a-zA-Z]*)%s*[xX]$")
-                local matchedStr = mSuffix or mPrefix
-                if matchedStr then
-                    local val = parseFloatCompact(matchedStr)
-                    if val > mult then
-                        mult = val
-                        multLabelIdx = idx
+                -- Look for a PlayerData / Replica / Profile / Inventory container table
+                local petsSub = nil
+                local equippedMap = nil
+                pcall(function()
+                    petsSub = rawget(tbl, "Pets") or rawget(tbl, "pets") or rawget(tbl, "OwnedPets") or rawget(tbl, "ownedPets") or rawget(tbl, "PetInventory")
+                    local eqRaw = rawget(tbl, "EquippedPets") or rawget(tbl, "equippedPets") or rawget(tbl, "Equipped")
+                    if type(eqRaw) == "table" then
+                        equippedMap = {}
+                        for ek, ev in pairs(eqRaw) do
+                            if type(ev) == "string" then
+                                equippedMap[ev] = true
+                            elseif type(ek) == "string" and ev == true then
+                                equippedMap[ek] = true
+                            end
+                        end
                     end
-                end
-            end
+                end)
 
-            -- Pass 2: Read stack count ONLY from a distinct label (never the multiplier label)
-            for idx, txt in ipairs(labels) do
-                if idx ~= multLabelIdx then
-                    local mStack = txt:match("^%s*[xX](%d+)%s*$")
-                    if mStack then
-                        local n = tonumber(mStack)
-                        if n and n >= 1 and n <= 9999 then
-                            count = n
-                            break
+                if type(petsSub) == "table" then
+                    -- Verify this is an owned player inventory table (not a static catalog definition table)
+                    local hasPlayerContext = (rawget(tbl, "Rebirths") ~= nil)
+                        or (rawget(tbl, "rebirths") ~= nil)
+                        or (rawget(tbl, "Eggs") ~= nil)
+                        or (rawget(tbl, "eggs") ~= nil)
+                        or (rawget(tbl, "Clicks") ~= nil)
+                        or (rawget(tbl, "Taps") ~= nil)
+                        or (rawget(tbl, "Settings") ~= nil)
+                        or (rawget(tbl, "Quests") ~= nil)
+                        or (rawget(tbl, "Teams") ~= nil)
+                        or (rawget(tbl, "PetTeams") ~= nil)
+                        or (equippedMap ~= nil)
+
+                    local entries = 0
+                    local hasInstanceShape = false
+                    local isStaticCatalog = false
+
+                    pcall(function()
+                        for k, v in pairs(petsSub) do
+                            entries = entries + 1
+                            if type(v) == "table" then
+                                if rawget(v, "Chance") ~= nil or rawget(v, "DropChance") ~= nil or rawget(v, "Model") ~= nil or rawget(v, "Animations") ~= nil then
+                                    isStaticCatalog = true
+                                end
+                                if rawget(v, "Equipped") ~= nil or rawget(v, "equipped") ~= nil or rawget(v, "Locked") ~= nil or rawget(v, "locked") ~= nil or rawget(v, "UUID") ~= nil or rawget(v, "UID") ~= nil or rawget(v, "Id") ~= nil or rawget(v, "id") ~= nil or rawget(v, "Name") ~= nil or rawget(v, "PetId") ~= nil or rawget(v, "Amount") ~= nil or rawget(v, "Count") ~= nil then
+                                    hasInstanceShape = true
+                                end
+                            end
+                        end
+                    end)
+
+                    if entries > 0 and not isStaticCatalog and (hasPlayerContext or hasInstanceShape) then
+                        local candidateSecrets = {}
+                        local candidateEquipped = {}
+                        local candidateInvCount = 0
+                        local candidatePower = 0
+
+                        pcall(function()
+                            for k, v in pairs(petsSub) do
+                                if type(v) == "table" then
+                                    local rawId = rawget(v, "Name") or rawget(v, "name") or rawget(v, "PetName") or rawget(v, "petName") or rawget(v, "PetId") or rawget(v, "petId") or rawget(v, "ItemId") or rawget(v, "Type") or rawget(v, "Id") or rawget(v, "id") or (type(k) == "string" and k)
+                                    local rawImg = extractAssetId(rawget(v, "Image") or rawget(v, "image") or rawget(v, "Icon") or rawget(v, "AssetId"))
+                                    local known = matchKnownSecret(tostring(rawId or ""), rawImg)
+                                    local rawRarity = tostring(rawget(v, "Rarity") or rawget(v, "rarity") or "")
+                                    local isSec = (known ~= nil) or (rawRarity:lower() == "secret") or (rawget(v, "IsSecret") == true)
+                                    local petName = (known and known.name) or (type(rawId) == "string" and not isBogusPetName(rawId) and rawId) or nil
+
+                                    if petName and not isBogusPetName(petName) then
+                                        local count = tonumber(rawget(v, "Amount") or rawget(v, "amount") or rawget(v, "Count") or rawget(v, "count") or rawget(v, "Copies") or 1) or 1
+                                        if count < 1 or count > 99999 then
+                                            count = 1
+                                        end
+                                        candidateInvCount = candidateInvCount + count
+                                        local variant = detectVariantFromTable(v, tostring(rawId or ""))
+                                        local isEq = (rawget(v, "Equipped") == true) or (rawget(v, "equipped") == true) or (equippedMap and (equippedMap[tostring(k)] or (rawget(v, "UUID") and equippedMap[tostring(rawget(v, "UUID"))]))) or false
+                                        local mult = parseFloatCompact(rawget(v, "Multiplier") or rawget(v, "multiplier") or (known and known.multiplier) or 1)
+                                        if mult <= 0 then
+                                            mult = 1
+                                        end
+                                        local power = parseFloatCompact(rawget(v, "Power") or rawget(v, "power") or (mult * 10))
+                                        candidatePower = candidatePower + (power * count)
+                                        local assetId = rawImg or (known and known.imageAssetId)
+                                        local tier = detectTier(rawRarity) or (known and known.tier) or (isSec and "Secret" or nil)
+
+                                        if isSec then
+                                            local aggKey = petName:lower() .. "::" .. variant:lower()
+                                            local existing = candidateSecrets[aggKey]
+                                            if existing then
+                                                existing.count = existing.count + count
+                                                existing.multiplier = math.max(existing.multiplier, mult)
+                                                existing.power = math.max(existing.power, power)
+                                                existing.isEquipped = existing.isEquipped or isEq
+                                                existing.imageAssetId = existing.imageAssetId or assetId
+                                            else
+                                                candidateSecrets[aggKey] = {
+                                                    id = tostring(k),
+                                                    name = petName,
+                                                    rarity = "Secret",
+                                                    variant = variant,
+                                                    tier = tier,
+                                                    count = count,
+                                                    multiplier = mult,
+                                                    power = power,
+                                                    isEquipped = isEq,
+                                                    eggSource = known and known.egg or nil,
+                                                    imageAssetId = assetId,
+                                                }
+                                            end
+                                        end
+
+                                        if isEq then
+                                            table.insert(candidateEquipped, {
+                                                id = tostring(k),
+                                                name = petName,
+                                                rarity = isSec and "Secret" or "Mythic",
+                                                variant = variant,
+                                                tier = tier,
+                                                multiplier = mult,
+                                                power = power,
+                                                isEquipped = true,
+                                                imageAssetId = assetId,
+                                            })
+                                        end
+                                    end
+                                end
+                            end
+                        end)
+
+                        local secTypes = 0
+                        for _, _ in pairs(candidateSecrets) do
+                            secTypes = secTypes + 1
+                        end
+                        if secTypes > 0 or (hasPlayerContext and candidateInvCount > invCount) then
+                            foundInventoryTable = true
+                            aggregatedSecrets = candidateSecrets
+                            equippedList = candidateEquipped
+                            invCount = candidateInvCount
+                            totalPower = candidatePower
                         end
                     end
                 end
             end
+        end
+    end)
 
-            local power = mult * 10
-            totalPower = totalPower + (power * count)
+    if not foundInventoryTable then
+        return nil, {}, 0, 0
+    end
+    local secretList = {}
+    for _, item in pairs(aggregatedSecrets) do
+        table.insert(secretList, item)
+    end
+    return secretList, equippedList, invCount, totalPower
+end
 
-            if isSecret then
-                table.insert(secretPets, {
-                    id = card.Name,
-                    name = petName,
-                    rarity = "Secret",
-                    variant = variant,
-                    tier = tier,
-                    count = count,
-                    multiplier = mult,
-                    power = power,
-                    isEquipped = isEquipped,
-                    eggSource = matchedKnown and matchedKnown.egg or nil,
-                    imageAssetId = assetId,
-                })
+-- Ignored non-pet ScreenGuis when scanning PlayerGui
+local IGNORED_SCREENGUIS = {
+    ["clanislandconcept"] = true,
+    ["playerlist"] = true,
+    ["topbarstandard"] = true,
+    ["topbarcentered"] = true,
+    ["topbarstandardclipped"] = true,
+    ["topbarcenteredclipped"] = true,
+    ["codes"] = true,
+    ["skilltreegui"] = true,
+    ["trading"] = true,
+    ["giveawayhud"] = true,
+    ["giveawaydraw"] = true,
+    ["digminigame"] = true,
+    ["wavedefense"] = true,
+    ["colosseumrewards"] = true,
+    ["onboarding"] = true,
+    ["onboardingintro"] = true,
+    ["dialogs"] = true,
+    ["dialog"] = true,
+    ["globalmessage"] = true,
+    ["notifications"] = true,
+    ["hatching"] = true,
+    ["hatchscreen"] = true,
+    ["egg opening stuff"] = true,
+}
+
+-- Finds all candidate Pet Inventory / PetTeam containers in PlayerGui (works even when ScreenGui is closed!)
+local function findPetContainers()
+    if CONFIG.PATHS.PetListGui then
+        local explicit = resolvePath(CONFIG.PATHS.PetListGui)
+        return explicit and { explicit } or {}
+    end
+    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if not pg then
+        return {}
+    end
+    local containers = {}
+    local seen = {}
+
+    local function addContainer(inst)
+        if inst and not seen[inst] then
+            seen[inst] = true
+            table.insert(containers, inst)
+        end
+    end
+
+    for _, gui in ipairs(pg:GetChildren()) do
+        if gui:IsA("ScreenGui") and not IGNORED_SCREENGUIS[gui.Name:lower()] then
+            local gName = gui.Name:lower()
+            for _, desc in ipairs(gui:GetDescendants()) do
+                if desc:IsA("ScrollingFrame") or (desc:IsA("Frame") and desc:FindFirstChildWhichIsA("UIGridLayout")) then
+                    local fullLower = desc:GetFullName():lower()
+                    if not (fullLower:find("rebirth", 1, true)
+                        or fullLower:find("quest", 1, true)
+                        or fullLower:find("badge", 1, true)
+                        or fullLower:find("clan", 1, true)
+                        or fullLower:find("shop", 1, true)
+                        or fullLower:find("index", 1, true)
+                        or fullLower:find("catalog", 1, true)) then
+                        if gName:find("pet", 1, true)
+                            or fullLower:find("pet", 1, true)
+                            or fullLower:find("inventory", 1, true)
+                            or fullLower:find("items.list", 1, true) then
+                            addContainer(desc)
+                        end
+                    end
+                end
             end
+        end
+    end
+    return containers
+end
 
-            if isEquipped then
-                table.insert(equippedPets, {
-                    id = card.Name,
-                    name = petName,
-                    rarity = isSecret and "Secret" or "Mythic",
-                    variant = variant,
-                    tier = tier,
-                    multiplier = mult,
-                    power = power,
-                    isEquipped = true,
-                    imageAssetId = assetId,
-                })
+local TEMPLATE_CARD_NAMES = {
+    ["template"] = true,
+    ["sample"] = true,
+    ["example"] = true,
+    ["prefab"] = true,
+    ["default"] = true,
+    ["placeholder"] = true,
+    ["empty"] = true,
+    ["slottemplate"] = true,
+    ["pettemplate"] = true,
+    ["itemtemplate"] = true,
+}
+
+-- Collects pets from PlayerGui containers + merges with getgc client inventory
+-- Returns: (secretPetsOrNil, equippedPets, totalInvCount, totalPetPower)
+local function collectPetsReadOnly()
+    discoverGamePetCatalog()
+
+    -- 1. Try reading full inventory from client memory (getgc) first
+    local gcSecrets, gcEquipped, gcInvCount, gcPower = collectPetsFromGc()
+
+    -- 2. Scan PlayerGui pet containers (both visible and hidden!)
+    local containers = findPetContainers()
+    local guiSecretsByKey = {}
+    local guiEquipped = {}
+    local guiInvCount = 0
+    local guiPower = 0
+    local anyContainerVisible = false
+    local seenCardInstances = {}
+
+    for _, container in ipairs(containers) do
+        if isGuiActuallyVisible(container) then
+            anyContainerVisible = true
+        end
+        for _, card in ipairs(container:GetChildren()) do
+            if card:IsA("GuiObject") and not card:IsA("UILayout") and not seenCardInstances[card] then
+                local cNameLower = card.Name:lower()
+                if not TEMPLATE_CARD_NAMES[cNameLower] and not cNameLower:find("template", 1, true) then
+                    seenCardInstances[card] = true
+                    local labels = {}
+                    local assetId = nil
+                    local isEquipped = false
+                    local viewportModelName = nil
+                    local attrJoined = ""
+
+                    local okAttr, cAttrs = pcall(function() return card:GetAttributes() end)
+                    if okAttr and type(cAttrs) == "table" then
+                        for ak, av in pairs(cAttrs) do
+                            attrJoined = attrJoined .. " | " .. tostring(ak) .. ":" .. tostring(av)
+                            local lk = tostring(ak):lower()
+                            if (lk == "equipped" or lk == "isequipped") and av == true then
+                                isEquipped = true
+                            end
+                            local aid = extractAssetId(av)
+                            if aid and not assetId then
+                                assetId = aid
+                            end
+                        end
+                    end
+
+                    for _, desc in ipairs(card:GetDescendants()) do
+                        if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Text and desc.Text ~= "" then
+                            table.insert(labels, desc.Text)
+                        elseif (desc:IsA("ImageLabel") or desc:IsA("ImageButton")) and desc.Image and desc.Image ~= "" then
+                            local extracted = extractAssetId(desc.Image)
+                            if extracted then
+                                if not assetId or ASSET_TO_SECRET[tostring(extracted)] then
+                                    assetId = extracted
+                                end
+                            end
+                            local nm = desc.Name:lower()
+                            if (nm:find("equip", 1, true) or nm:find("check", 1, true)) and desc.Visible then
+                                isEquipped = true
+                            end
+                        elseif desc:IsA("ViewportFrame") then
+                            local mdl = desc:FindFirstChildOfClass("Model") or desc:FindFirstChildOfClass("MeshPart")
+                            if mdl and mdl.Name ~= "" and mdl.Name ~= "Camera" then
+                                viewportModelName = mdl.Name
+                            end
+                        elseif desc:IsA("ValueBase") and desc.Value ~= nil then
+                            table.insert(labels, tostring(desc.Value))
+                        end
+                    end
+
+                    local joined = table.concat(labels, " | ") .. " | " .. card.Name .. " | " .. (viewportModelName or "") .. attrJoined
+                    local lowerJoined = joined:lower()
+                    local matchedKnown = matchKnownSecret(joined, assetId)
+                        or (viewportModelName and matchKnownSecret(viewportModelName, assetId))
+                        or matchKnownSecret(card.Name, assetId)
+
+                    local isSecret = (matchedKnown ~= nil) or (lowerJoined:find("secret", 1, true) ~= nil)
+                    local candidateName = (matchedKnown and matchedKnown.name)
+                        or viewportModelName
+                        or labels[1]
+                        or card.Name
+
+                    if candidateName and not isBogusPetName(candidateName) then
+                        guiInvCount = guiInvCount + 1
+                        local variant = detectVariant(joined)
+                        local tier = detectTier(joined) or (matchedKnown and matchedKnown.tier) or (isSecret and "Secret" or nil)
+
+                        local mult = (matchedKnown and matchedKnown.multiplier) or 1.0
+                        local multLabelIdx = nil
+                        local count = 1
+
+                        -- Pass 1: Identify multiplier label (supports both "x25,000" and "25,000x")
+                        for idx, txt in ipairs(labels) do
+                            local trimmed = txt:gsub("^%s+", ""):gsub("%s+$", "")
+                            local mPrefix = trimmed:match("^[xX]%s*([%d%.,]+[a-zA-Z]*)$")
+                            local mSuffix = trimmed:match("^([%d%.,]+[a-zA-Z]*)%s*[xX]$")
+                            local matchedStr = mSuffix or mPrefix
+                            if matchedStr then
+                                local val = parseFloatCompact(matchedStr)
+                                if val > mult then
+                                    mult = val
+                                    multLabelIdx = idx
+                                end
+                            end
+                        end
+
+                        -- Pass 2: Read stack count ONLY from a distinct label (never the multiplier label)
+                        for idx, txt in ipairs(labels) do
+                            if idx ~= multLabelIdx then
+                                local mStack = txt:match("^%s*[xX](%d+)%s*$")
+                                if mStack then
+                                    local n = tonumber(mStack)
+                                    if n and n >= 1 and n <= 9999 then
+                                        count = n
+                                        break
+                                    end
+                                end
+                            end
+                        end
+
+                        local power = mult * 10
+                        guiPower = guiPower + (power * count)
+                        local finalAssetId = assetId or (matchedKnown and matchedKnown.imageAssetId)
+
+                        if isSecret then
+                            local aggKey = candidateName:lower() .. "::" .. variant:lower()
+                            local existing = guiSecretsByKey[aggKey]
+                            if existing then
+                                existing.count = existing.count + count
+                                existing.multiplier = math.max(existing.multiplier, mult)
+                                existing.power = math.max(existing.power, power)
+                                existing.isEquipped = existing.isEquipped or isEquipped
+                                existing.imageAssetId = existing.imageAssetId or finalAssetId
+                            else
+                                guiSecretsByKey[aggKey] = {
+                                    id = card.Name,
+                                    name = candidateName,
+                                    rarity = "Secret",
+                                    variant = variant,
+                                    tier = tier,
+                                    count = count,
+                                    multiplier = mult,
+                                    power = power,
+                                    isEquipped = isEquipped,
+                                    eggSource = matchedKnown and matchedKnown.egg or nil,
+                                    imageAssetId = finalAssetId,
+                                }
+                            end
+                        end
+
+                        if isEquipped then
+                            table.insert(guiEquipped, {
+                                id = card.Name,
+                                name = candidateName,
+                                rarity = isSecret and "Secret" or "Mythic",
+                                variant = variant,
+                                tier = tier,
+                                multiplier = mult,
+                                power = power,
+                                isEquipped = true,
+                                imageAssetId = finalAssetId,
+                            })
+                        end
+                    end
+                end
             end
         end
     end
 
-    return secretPets, equippedPets, invCount, totalPower
+    local guiSecrets = {}
+    for _, item in pairs(guiSecretsByKey) do
+        table.insert(guiSecrets, item)
+    end
+
+    -- Prefer whichever source discovered more Secret pets; preserve AFK Closed-Inventory Guard when neither found an open inventory
+    if gcSecrets and #gcSecrets >= #guiSecrets and #gcSecrets > 0 then
+        return gcSecrets, (#gcEquipped > 0 and gcEquipped or guiEquipped), math.max(gcInvCount, guiInvCount), math.max(gcPower, guiPower)
+    end
+    if #guiSecrets > 0 or anyContainerVisible then
+        return guiSecrets, guiEquipped, guiInvCount, guiPower
+    end
+    if gcSecrets then
+        return gcSecrets, gcEquipped, gcInvCount, gcPower
+    end
+    return nil, {}, 0, 0
 end
 
 -- Collects active boosts/potions from optional BoostListGui
@@ -685,22 +1246,34 @@ local function tryQueueHatchFromText(rawText)
         return
     end
     local lower = rawText:lower()
-    if not (lower:find("hatched", 1, true) or lower:find("secret", 1, true)) then
+    -- Reject negative/placeholder UI labels like "You haven't hatched a Secret yet!" or "Secret Skip"
+    if lower:find("haven't", 1, true)
+        or lower:find("havent", 1, true)
+        or lower:find("no secret", 1, true)
+        or lower:find("not hatched", 1, true)
+        or lower:find("secret skip", 1, true)
+        or lower:find("secret luck", 1, true) then
         return
     end
-    -- Only attribute messages that mention LocalPlayer or appear in LocalPlayer's own hatch popup
-    local matchedKnown = nil
-    for key, info in pairs(KNOWN_SECRETS) do
-        if lower:find(key, 1, true) then
-            matchedKnown = info
-            break
+    if not lower:find("hatched", 1, true) then
+        return
+    end
+
+    local matchedKnown = matchKnownSecret(rawText, nil)
+    local extractedName = nil
+    if not matchedKnown then
+        if not lower:find("secret", 1, true) then
+            return
         end
+        extractedName = rawText:match("[Hh]atched%s+a?n?%s*[Ss]ecret%s+([A-Za-z0-9%s%-']+)")
+            or rawText:match("[Hh]atched%s+a?n?%s*([A-Za-z0-9%s%-']+)%s*%([Ss]ecret%)")
     end
-    if not matchedKnown and not lower:find("secret", 1, true) then
+
+    local petName = (matchedKnown and matchedKnown.name) or (extractedName and extractedName:gsub("^%s+", ""):gsub("%s+$", "")) or nil
+    if not petName or isBogusPetName(petName) then
         return
     end
-    local petName = matchedKnown and matchedKnown.name or rawText:match("[Hh]atched%s+a?n?%s*([A-Za-z0-9%s]+)") or "Unknown Secret"
-    petName = petName:gsub("^%s+", ""):gsub("%s+$", "")
+
     local variant = detectVariant(rawText)
     local odds = rawText:match("(1%s+in%s+[%d%.,]+[KMBT]?)")
 
@@ -711,6 +1284,7 @@ local function tryQueueHatchFromText(rawText)
         tier = detectTier(rawText) or (matchedKnown and matchedKnown.tier) or "Secret",
         eggName = matchedKnown and matchedKnown.egg or nil,
         odds = odds,
+        imageAssetId = matchedKnown and matchedKnown.imageAssetId or nil,
         timestamp = os.time(),
     })
 end
@@ -757,12 +1331,16 @@ local function attachHatchListeners()
     end
 end
 
--- Inspector Mode: dumps bounded read-only hierarchy so user can configure CONFIG.PATHS in Web UI
+-- Inspector Mode: dumps bounded read-only hierarchy (including RightHud, PetTeams, Game, ReplicatedStorage & getgc summary)
 local function sendInspectorSnapshot()
+    discoverGamePetCatalog()
     local dump = {
+        scriptVersion = SCRIPT_VERSION,
         leaderstats = {},
         attributes = {},
         candidatePetGuis = {},
+        petUiDetails = {},
+        replicatedStorageItems = {},
         screenGuis = {},
     }
 
@@ -782,19 +1360,37 @@ local function sendInspectorSnapshot()
         end
     end
 
+    if ReplicatedStorage then
+        pcall(function()
+            for _, child in ipairs(ReplicatedStorage:GetChildren()) do
+                table.insert(dump.replicatedStorageItems, { name = child.Name, className = child.ClassName, children = #child:GetChildren() })
+            end
+        end)
+    end
+
     local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
     if pg then
         for _, gui in ipairs(pg:GetChildren()) do
             if gui:IsA("ScreenGui") then
                 table.insert(dump.screenGuis, { name = gui.Name, enabled = gui.Enabled })
-                for _, desc in ipairs(gui:GetDescendants()) do
-                    if desc:IsA("ScrollingFrame") and #dump.candidatePetGuis < 20 then
-                        local full = desc:GetFullName():gsub("^Players%.[^%.]+%.", "")
-                        table.insert(dump.candidatePetGuis, {
-                            path = full,
-                            visible = isGuiActuallyVisible(desc),
-                            children = #desc:GetChildren(),
-                        })
+                local gLower = gui.Name:lower()
+                if not IGNORED_SCREENGUIS[gLower] then
+                    for _, desc in ipairs(gui:GetDescendants()) do
+                        if (desc:IsA("ScrollingFrame") or (desc:IsA("Frame") and desc:FindFirstChildWhichIsA("UIGridLayout"))) and #dump.candidatePetGuis < 40 then
+                            local full = desc:GetFullName():gsub("^Players%.[^%.]+%.", "")
+                            local sampleNames = {}
+                            for _, ch in ipairs(desc:GetChildren()) do
+                                if not ch:IsA("UILayout") and #sampleNames < 5 then
+                                    table.insert(sampleNames, ch.Name)
+                                end
+                            end
+                            table.insert(dump.candidatePetGuis, {
+                                path = full,
+                                visible = isGuiActuallyVisible(desc),
+                                children = #desc:GetChildren(),
+                                samples = sampleNames,
+                            })
+                        end
                     end
                 end
             end
@@ -816,7 +1412,8 @@ if CONFIG.INSPECT_ON_START then
     task.spawn(sendInspectorSnapshot)
 end
 
-print("[TrackStats v2] Live read-only telemetry started -> " .. CONFIG.ENDPOINT_URL)
+local keyStatus = (#CONFIG.API_KEY > 0) and "Key: set" or "Key: open"
+print("[TrackStats v" .. SCRIPT_VERSION .. "] Live read-only telemetry started -> " .. CONFIG.ENDPOINT_URL .. " (" .. keyStatus .. ")")
 
 task.spawn(function()
     while _G.__TapSimTrackStats_Token == RUN_TOKEN do
@@ -852,12 +1449,27 @@ task.spawn(function()
                 timestamp = os.time(),
             }
 
-            -- AFK Closed-Inventory Guard: only include secretPets when inventory UI is visibly open
             if secretPets ~= nil then
                 payload.secretPets = secretPets
             end
 
-            postJson(CONFIG.ENDPOINT_URL, payload)
+            local okPost, resp = postJson(CONFIG.ENDPOINT_URL, payload)
+            if CONFIG.AUTO_RELOAD and okPost and type(resp) == "table" and type(resp.Body) == "string" then
+                local okDec, bodyTbl = pcall(function() return HttpService:JSONDecode(resp.Body) end)
+                if okDec and type(bodyTbl) == "table" and type(bodyTbl.script_version) == "string" and bodyTbl.script_version ~= SCRIPT_VERSION then
+                    print("[TrackStats] New script version " .. bodyTbl.script_version .. " available — hot-reloading...")
+                    _G.__TapSimTrackStats_Token = "RELOADING"
+                    task.spawn(function()
+                        local okGet, src = pcall(function() return game:HttpGet(CONFIG.LOADER_URL) end)
+                        if okGet and type(src) == "string" and #src > 100 then
+                            local fn = loadstring(src)
+                            if fn then
+                                fn()
+                            end
+                        end
+                    end)
+                end
+            end
         end)
         if not ok then
             logDebug("Tick error: " .. tostring(err))
@@ -868,5 +1480,5 @@ task.spawn(function()
     for _, conn in ipairs(connections) do
         pcall(function() conn:Disconnect() end)
     end
-    print("[TrackStats v2] Stopped previous reporter instance.")
+    print("[TrackStats v" .. SCRIPT_VERSION .. "] Stopped previous reporter instance.")
 end)

@@ -237,3 +237,77 @@ def test_bearer_and_x_admin_password_headers_and_public_base_url(client, monkeyp
     assert cfg["is_admin"] is True
     assert cfg["ingest_key"] == "hdr_ingest_88"
     assert cfg["base_url"] == "https://custom.trackstats.gg"
+
+
+def test_bogus_secret_names_rejected_and_purged(client):
+    uid = 81009
+    db.delete_account(uid)
+    session_manager.remove_account(uid)
+
+    # Simulate legacy bogus rows already in DB (like "Unknown Secret" and "yet" from false UI matches)
+    db.upsert_account(uid, "EbonyHannah2021", "EbonyHannah2021", "")
+    db.increment_account_secret(uid, "Unknown Secret", "Normal", "Secret", None, None, None, 1000.0)
+    db.increment_account_secret(uid, "yet", "Normal", "Secret", None, None, None, 1001.0)
+    db.record_hatch_event(
+        {
+            "event_key": "bogus_1",
+            "user_id": uid,
+            "actor_name": "EbonyHannah2021",
+            "pet_name": "yet",
+            "rarity": "Secret",
+            "variant": "Normal",
+            "timestamp": 1001.0,
+        }
+    )
+
+    removed = db.purge_bogus_secrets()
+    assert removed >= 2
+    assert db.get_account_secrets(uid) == []
+
+    # Now send telemetry with bogus recentHatches and bogus secretPets alongside a real Secret ("Dark Cat")
+    res = client.post(
+        "/api/v1/telemetry",
+        json={
+            "userId": uid,
+            "currentTaps": 100,
+            "totalTaps": 100,
+            "secretPets": [
+                {"name": "Unknown Secret", "rarity": "Secret", "variant": "Normal", "count": 1},
+                {"name": "yet", "rarity": "Secret", "variant": "Normal", "count": 1},
+                {"name": "Dark Cat", "rarity": "Secret", "variant": "Normal", "count": 2},
+            ],
+            "recentHatches": [
+                {"petName": "Unknown Secret", "rarity": "Secret", "variant": "Normal"},
+                {"petName": "yet", "rarity": "Secret", "variant": "Normal"},
+            ],
+        },
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["secret_count"] == 2
+    assert data["new_hatches_count"] == 0
+
+    vault = client.get(f"/api/v1/secrets?user_id={uid}").json()
+    names = [g["name"] for g in vault["grouped"]]
+    assert names == ["Dark Cat"]
+    assert vault["grouped"][0]["image_url"].endswith("/dark-cat.png")
+
+
+def test_catalog_matches_variant_prefixed_and_compact_secret_names_to_real_images():
+    from src.main import pet_catalog
+
+    assert pet_catalog.resolve_image_url("Golden Dark Cat").endswith("/dark-cat.png")
+    assert pet_catalog.resolve_image_url("Rainbow King Of Hell").endswith("/king-of-hell.png")
+    assert pet_catalog.resolve_image_url("DarkCat").endswith("/dark-cat.png")
+    assert pet_catalog.resolve_image_url("[Secret] Chronos").endswith("/chronos.png")
+
+
+def test_luau_script_reads_inventory_via_getgc_and_hidden_gui_and_blocks_yet_false_positive(client):
+    lua = client.get("/loader.lua").text
+    assert "getgc" in lua
+    assert "ReplicatedStorage" in lua
+    assert "SpriteHolder" in lua
+    assert "BOGUS_PET_NAMES" in lua
+    assert '["yet"] = true' in lua
+    assert '["unknown secret"] = true' in lua
+    assert "script_version" in lua

@@ -17,6 +17,52 @@ def slugify_pet_name(name: str) -> str:
     return text.strip("-") or "unknown-pet"
 
 
+BOGUS_SECRET_SLUGS = {
+    "",
+    "unknown-pet",
+    "unknown-secret",
+    "unknown",
+    "yet",
+    "secret",
+    "secrets",
+    "secret-pet",
+    "secret-pets",
+    "secret-pool",
+    "secret-skip",
+    "secret-luck",
+    "skip",
+    "luck",
+    "none",
+    "null",
+    "nil",
+    "n-a",
+    "na",
+    "auto",
+    "default",
+    "template",
+    "sample",
+    "placeholder",
+    "empty",
+    "hatched",
+    "no-secrets-hatched-yet",
+    "haven-t-hatched-a-secret-yet",
+}
+
+
+def is_bogus_secret_name(name: Optional[str]) -> bool:
+    if not name or not str(name).strip():
+        return True
+    raw = str(name).strip().lower()
+    slug = slugify_pet_name(raw)
+    if slug in BOGUS_SECRET_SLUGS:
+        return True
+    if slug.endswith("-yet") or "hatched-a-secret" in slug or "no-secret" in slug:
+        return True
+    if len(slug) <= 2:
+        return True
+    return False
+
+
 def normalize_variant(variant: Optional[str]) -> str:
     if not variant or not str(variant).strip():
         return "Normal"

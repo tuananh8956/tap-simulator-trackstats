@@ -257,6 +257,7 @@ async def ingest_telemetry(payload: TelemetryPayload, request: Request):
         "tps": result.get("tps", 0.0),
         "secret_count": result.get("secret_count", 0),
         "new_hatches_count": len(result.get("new_hatches", [])),
+        "script_version": "2.2.0",
     }
 
 
@@ -398,6 +399,14 @@ async def get_luau_connector_script(request: Request, endpoint: Optional[str] = 
             lua_text,
             count=1,
         )
+        loader_ep = f"{base_url}/loader.lua"
+        if not any(ch in loader_ep for ch in ("\r", "\n", '"', "'", "\\", " ")):
+            lua_text = re.sub(
+                r'(LOADER_URL\s*=\s*")[^"]*(")',
+                lambda m: f"{m.group(1)}{loader_ep}{m.group(2)}",
+                lua_text,
+                count=1,
+            )
 
     return Response(
         content=lua_text,

@@ -4,7 +4,7 @@ from typing import Dict, Any, Optional, List, Tuple
 from src.database import Database
 from src.rate_engine import RateEngine
 from src.pet_catalog import PetCatalogService
-from src.models import TelemetryPayload, slugify_pet_name, normalize_variant
+from src.models import TelemetryPayload, is_bogus_secret_name, slugify_pet_name, normalize_variant
 
 
 class SessionManager:
@@ -108,22 +108,25 @@ class SessionManager:
 
             # 1) Process explicit recentHatches first (with 15s cross-source dedup)
             for h in payload.recentHatches:
+                if is_bogus_secret_name(h.petName):
+                    continue
+                canonical_pet_name = self.pet_catalog.canonical_name(h.petName)
                 self.pet_catalog.register_discovered_pet(
-                    h.petName,
+                    canonical_pet_name,
                     rarity=h.rarity,
                     tier=h.tier,
                     egg_source=h.eggName,
                     odds=h.odds,
                     image_asset_id=h.imageAssetId,
                 )
-                self._collect_pending_asset(h.petName, h.imageAssetId, pending_asset_ids)
-                img_url = self.pet_catalog.resolve_image_url(h.petName, explicit_url=h.imageUrl, asset_id=h.imageAssetId)
+                self._collect_pending_asset(canonical_pet_name, h.imageAssetId, pending_asset_ids)
+                img_url = self.pet_catalog.resolve_image_url(canonical_pet_name, explicit_url=h.imageUrl, asset_id=h.imageAssetId)
                 recorded = self.db.record_hatch_event(
                     {
                         "event_key": h.eventId,
                         "user_id": user_id,
                         "actor_name": actor_name,
-                        "pet_name": h.petName,
+                        "pet_name": canonical_pet_name,
                         "rarity": h.rarity,
                         "variant": h.variant,
                         "tier": h.tier,
@@ -143,7 +146,7 @@ class SessionManager:
                     if payload.secretPets is None and (h.rarity or "").lower() == "secret":
                         self.db.increment_account_secret(
                             user_id=user_id,
-                            name=h.petName,
+                            name=canonical_pet_name,
                             variant=h.variant,
                             tier=h.tier,
                             egg_source=h.eggName,
@@ -157,19 +160,26 @@ class SessionManager:
             prev_counts = {r["pet_key"]: int(r["count"]) for r in prev_rows}
 
             if payload.secretPets is not None:
+                valid_secret_dumps: List[Dict[str, Any]] = []
                 for sp in payload.secretPets:
+                    if is_bogus_secret_name(sp.name):
+                        continue
+                    canon_name = self.pet_catalog.canonical_name(sp.name)
                     self.pet_catalog.register_discovered_pet(
-                        sp.name,
+                        canon_name,
                         rarity="Secret",
                         tier=sp.tier,
                         egg_source=sp.eggSource,
                         image_asset_id=sp.imageAssetId,
                     )
-                    self._collect_pending_asset(sp.name, sp.imageAssetId, pending_asset_ids)
+                    self._collect_pending_asset(canon_name, sp.imageAssetId, pending_asset_ids)
+                    dumped = sp.model_dump()
+                    dumped["name"] = canon_name
+                    valid_secret_dumps.append(dumped)
 
                 secret_count = self.db.replace_account_secrets(
                     user_id=user_id,
-                    secrets=[sp.model_dump() for sp in payload.secretPets],
+                    secrets=valid_secret_dumps,
                     updated_at=now,
                     explicit_total_count=payload.secretCount,
                 )

@@ -10,6 +10,8 @@ from pathlib import Path
 from src.models import (
     TelemetryPayload,
     AccountInfo,
+    BOGUS_SECRET_SLUGS,
+    is_bogus_secret_name,
     slugify_pet_name,
     normalize_variant,
     sanitize_image_url,
@@ -165,6 +167,43 @@ class Database:
             self._ensure_column(conn, "snapshots", "eggs_hatched", "INTEGER DEFAULT 0")
             self._ensure_column(conn, "snapshots", "secret_count", "INTEGER DEFAULT 0")
             self._ensure_column(conn, "snapshots", "world", "TEXT")
+        self.purge_bogus_secrets()
+
+    def purge_bogus_secrets(self) -> int:
+        removed = 0
+        with self._get_connection() as conn:
+            sec_rows = conn.execute("SELECT user_id, pet_key, name FROM account_secrets;").fetchall()
+            for r in sec_rows:
+                if is_bogus_secret_name(r["name"]):
+                    cur = conn.execute(
+                        "DELETE FROM account_secrets WHERE user_id = ? AND pet_key = ?;",
+                        (r["user_id"], r["pet_key"]),
+                    )
+                    removed += cur.rowcount
+
+            hatch_rows = conn.execute("SELECT id, pet_name FROM hatch_events;").fetchall()
+            for r in hatch_rows:
+                if is_bogus_secret_name(r["pet_name"]):
+                    cur = conn.execute("DELETE FROM hatch_events WHERE id = ?;", (r["id"],))
+                    removed += cur.rowcount
+
+            cat_rows = conn.execute("SELECT slug, name FROM pet_catalog;").fetchall()
+            for r in cat_rows:
+                if is_bogus_secret_name(r["name"]) or is_bogus_secret_name(r["slug"]):
+                    cur = conn.execute("DELETE FROM pet_catalog WHERE slug = ?;", (r["slug"],))
+                    removed += cur.rowcount
+
+            if removed > 0:
+                conn.execute(
+                    """
+                    UPDATE accounts
+                    SET secret_count = COALESCE(
+                        (SELECT SUM(count) FROM account_secrets WHERE account_secrets.user_id = accounts.user_id),
+                        0
+                    );
+                    """
+                )
+        return removed
 
     def upsert_account(
         self,

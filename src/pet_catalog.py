@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from src.database import Database
-from src.models import slugify_pet_name, sanitize_image_url, extract_asset_id
+from src.models import is_bogus_secret_name, slugify_pet_name, sanitize_image_url, extract_asset_id
 
 
 SEEDED_SECRETS: List[Dict[str, str]] = [
@@ -53,11 +53,55 @@ _PALETTES = [
 
 
 class PetCatalogService:
+    _STRIP_PREFIXES = (
+        "golden-shiny-",
+        "rainbow-shiny-",
+        "diamond-shiny-",
+        "golden-",
+        "gold-",
+        "rainbow-",
+        "diamond-",
+        "shiny-",
+        "normal-",
+        "secret-iii-",
+        "secret-ii-",
+        "secret-i-",
+        "secret-",
+        "mythic-",
+    )
+
     def __init__(self, db: Database, assets_dir: Optional[Path] = None):
         self.db = db
         self.assets_dir = Path(assets_dir) if assets_dir else _DEFAULT_ASSETS_DIR
         self._aliases: Dict[str, str] = dict(SLUG_ALIASES)
+        self._compact_to_slug: Dict[str, str] = {}
+        self._slug_to_name: Dict[str, str] = {}
         self._manifest_entries: List[Dict[str, Any]] = self._load_manifest()
+        self._index_known_slugs()
+
+    def _register_slug_index(self, slug: str, name: Optional[str] = None) -> None:
+        if not slug:
+            return
+        compact = slug.replace("-", "")
+        if compact:
+            self._compact_to_slug[compact] = slug
+        if name:
+            self._slug_to_name[slug] = name
+
+    def _index_known_slugs(self) -> None:
+        for entry in self._manifest_entries:
+            c_slug = slugify_pet_name(entry.get("slug") or entry.get("name") or "")
+            c_name = entry.get("name")
+            self._register_slug_index(c_slug, c_name)
+            for alias in entry.get("aliases", []) or []:
+                a_slug = slugify_pet_name(alias)
+                if a_slug and c_slug:
+                    self._compact_to_slug[a_slug.replace("-", "")] = c_slug
+        for item in SEEDED_SECRETS:
+            c_slug = slugify_pet_name(item["name"])
+            self._register_slug_index(c_slug, item["name"])
+        for alias_slug, target_slug in self._aliases.items():
+            self._compact_to_slug[alias_slug.replace("-", "")] = target_slug
 
     def _load_manifest(self) -> List[Dict[str, Any]]:
         manifest_path = self.assets_dir / "catalog_manifest.json"
@@ -79,7 +123,43 @@ class PetCatalogService:
 
     def canonical_slug(self, name_or_slug: str) -> str:
         raw_slug = slugify_pet_name(name_or_slug)
+        if raw_slug in self._aliases:
+            return self._aliases[raw_slug]
+        if raw_slug in self._slug_to_name:
+            return raw_slug
+        compact = raw_slug.replace("-", "")
+        if compact in self._compact_to_slug:
+            return self._compact_to_slug[compact]
+
+        # Strip leading variant/rarity prefixes like "Golden Dark Cat" or "[Secret] Chronos"
+        candidate = raw_slug
+        changed = True
+        while changed:
+            changed = False
+            for pref in self._STRIP_PREFIXES:
+                if candidate.startswith(pref) and len(candidate) > len(pref):
+                    candidate = candidate[len(pref):]
+                    changed = True
+                    break
+        if candidate != raw_slug:
+            if candidate in self._aliases:
+                return self._aliases[candidate]
+            if candidate in self._slug_to_name or self._find_local_asset_url(candidate):
+                return candidate
+            c_compact = candidate.replace("-", "")
+            if c_compact in self._compact_to_slug:
+                return self._compact_to_slug[c_compact]
+
         return self._aliases.get(raw_slug, raw_slug)
+
+    def canonical_name(self, raw_name: str) -> str:
+        slug = self.canonical_slug(raw_name)
+        if slug in self._slug_to_name:
+            return self._slug_to_name[slug]
+        item = self.db.get_pet_catalog_item(slug)
+        if item and item.get("name"):
+            return item["name"]
+        return (raw_name or "").strip()
 
     def seed_defaults(self) -> int:
         seeded: Dict[str, Dict[str, Any]] = {}
@@ -181,10 +261,13 @@ class PetCatalogService:
         odds: Optional[str] = None,
         image_asset_id: Optional[int] = None,
     ) -> Dict[str, Any]:
+        if is_bogus_secret_name(name):
+            return {}
         slug = self.canonical_slug(name)
+        canon_name = self.canonical_name(name)
         return self.db.upsert_pet_catalog(
             slug=slug,
-            name=(name or "Unknown Secret").strip() or "Unknown Secret",
+            name=canon_name or "Secret Pet",
             rarity=rarity or "Secret",
             tier=tier,
             default_egg=egg_source,
